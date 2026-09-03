@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: ledger-service
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  datasource:
+    hikari:
+      # ADR-004: "the transaction does no network I/O while holding the lock", and a statement
+      # timeout bounds head-of-line blocking on a hot account.
+      connection-init-sql: SET statement_timeout = '1s'
