@@ -46,7 +46,7 @@ jobs:
         # Runs even when the build failed — a red run with no visible reason is worse
         # than a red run.
         if: always()
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: '**/target/*-reports/TEST-*.xml'
           require_tests: false
