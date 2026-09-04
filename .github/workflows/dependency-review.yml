@@ -1,0 +1,18 @@
+# Blocks a pull request that introduces a dependency with a known vulnerability or an
+# incompatible licence. Cheap to run, and it catches the class of problem that is
+# expensive to discover after release.
+name: Dependency review
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high

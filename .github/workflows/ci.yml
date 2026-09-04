@@ -1,0 +1,64 @@
+# Continuous integration.
+#
+# One job, not three. Splitting build / test / verify across jobs looks tidy and then
+# spends more wall-clock time re-downloading dependencies and re-compiling than the
+# tests themselves take. Split when a stage is genuinely slow enough to parallelise.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A new push to the same branch cancels the run already in flight — the result of the
+# older commit is not information anyone will act on.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          # Caches ~/.m2 keyed on the POM. Without it, every run re-downloads the
+          # dependency tree, which for a Spring Boot service is minutes per run.
+          cache: maven
+
+      # No service container for PostgreSQL: Testcontainers starts one from the same
+      # definition the tests use locally, so CI and a laptop cannot drift apart.
+      # Docker is available on ubuntu-latest out of the box.
+      - name: Build, test and verify
+        run: ./mvnw -B --no-transfer-progress verify
+
+      - name: Publish test report
+        # Runs even when the build failed — a red run with no visible reason is worse
+        # than a red run.
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: '**/target/*-reports/TEST-*.xml'
+          require_tests: false
+
+      - name: Upload build artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            target/*.jar
+            target/surefire-reports/
+            target/failsafe-reports/
+          retention-days: 7
+          if-no-files-found: ignore

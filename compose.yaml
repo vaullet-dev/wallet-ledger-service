@@ -1,0 +1,36 @@
+# Local dependencies. Started and stopped automatically by spring-boot-docker-compose
+# when the application runs under the `local` profile — `docker compose up` by hand is
+# optional, not required.
+#
+# Testcontainers provides the same services to the test suite, so there is exactly one
+# definition of "what this service needs to run" and it is checked in.
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ledger
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+    ports:
+      # Not 5432. Plenty of machines already run a native PostgreSQL there, and the
+      # failure mode is nasty: the container starts, the app connects to the *other*
+      # database, and the error is a confusing "role does not exist" rather than
+      # "port in use". Boot reads the published port from Compose and configures the
+      # datasource accordingly, so nothing else needs to change. Override with
+      # DB_HOST_PORT if 55432 is taken too.
+      - '${DB_HOST_PORT:-55432}:5432'
+    healthcheck:
+      # Boot waits for this before starting the application; without it the first
+      # connection attempt races the database's startup.
+      test: ['CMD-SHELL', 'pg_isready -U ledger -d ledger']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    tmpfs:
+      # Local data is disposable. Keeping it off disk makes restarts instant and stops
+      # a stale volume from outliving a migration change.
+      #
+      # The mount is /var/lib/postgresql, not .../data: from PostgreSQL 18 the official
+      # image puts the cluster in a version-named subdirectory, and mounting the old
+      # path makes the container refuse to start.
+      - /var/lib/postgresql

@@ -1,11 +1,157 @@
+# ---------------------------------------------------------------------------
+# Base configuration — shared by every environment.
+#
+# Conventions this file follows:
+#   * YAML, not .properties: nesting makes the shape of the configuration visible.
+#   * Every environment-specific or secret value is an ${ENV_VAR} reference.
+#     A default is provided only where the default is safe everywhere.
+#   * Profile-specific overrides live in application-<profile>.yaml, never in
+#     if/else inside the application.
+# ---------------------------------------------------------------------------
 spring:
   application:
     name: ledger-service
+
+  main:
+    banner-mode: off
+
+  threads:
+    # Virtual threads (Java 21+). Each request gets its own carrier-free thread, so a
+    # blocking JDBC call no longer occupies a platform thread. This is what makes plain
+    # blocking Spring MVC scale like a reactive stack for I/O-bound work, without the
+    # debugging cost of WebFlux. Watch for `synchronized` blocks around blocking calls
+    # in older libraries — they pin the carrier thread.
+    virtual:
+      enabled: true
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ledger}
+    username: ${DB_USERNAME:ledger}
+    password: ${DB_PASSWORD:ledger}
+    hikari:
+      # ADR-004: "the transaction does no network I/O while holding the lock", and a
+      # statement timeout bounds head-of-line blocking on a hot account. A reserve that
+      # cannot take the account row lock within a second gives up, and the caller gets
+      # 503 ACCOUNT_BUSY with a Retry-After rather than a thread parked indefinitely.
+      connection-init-sql: SET statement_timeout = '1s'
+      # Small pools beat large ones: the database, not the app, is the bottleneck, and a
+      # pool bigger than the database's worker count just moves the queue. Doubly true
+      # here, where throughput is bounded by per-account row locks rather than by
+      # connections.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+      # Hikari's own settings are plain milliseconds — they bind straight onto
+      # HikariConfig and do not go through Spring's Duration converter, so `3s` here
+      # fails at startup. Spring-owned properties elsewhere in this file do take
+      # durations; the inconsistency is Hikari's, and it is worth a comment.
+      connection-timeout: 3000
+      # Logs a stack trace for a connection held longer than this — finds the
+      # long-running transaction before it exhausts the pool in production.
+      leak-detection-threshold: 30000
+
   flyway:
     enabled: true
     locations: classpath:db/migration
-  datasource:
-    hikari:
-      # ADR-004: "the transaction does no network I/O while holding the lock", and a statement
-      # timeout bounds head-of-line blocking on a hot account.
-      connection-init-sql: SET statement_timeout = '1s'
+    # Refuse to run against a database whose history does not match — a checksum
+    # mismatch means someone edited an applied migration. On a ledger that is not a
+    # style violation, it is a schema whose constraints nobody can vouch for.
+    validate-on-migrate: true
+
+  jackson:
+    # ADR-011 fixes the external wire format as snake_case: reservation_id, expires_at,
+    # available_after. Setting it once here beats @JsonProperty on every component and
+    # makes it impossible for one endpoint to drift into camelCase.
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+
+  mvc:
+    # RFC 9457 problem+json for framework-raised errors too, so a malformed body and a
+    # 404 from Spring itself look like the errors ApiExceptionHandler produces.
+    problemdetails:
+      enabled: true
+    # Deliberately no `apiversion` block. The @vaullet-io template resolves the API
+    # version from an X-API-Version header; ADR-011 chose the major version in the URI
+    # path instead (/v1/reservations) and rejected header versioning outright, because a
+    # path is greppable in logs and dashboards while a missing header is an implicit
+    # version nobody notices. See WebMvcConfig.
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # No default on purpose. An unset issuer means no JwtDecoder, which means the
+          # context refuses to start rather than starting without token validation.
+          issuer-uri: ${OAUTH2_ISSUER_URI:}
+
+server:
+  # Behind a load balancer or ingress, trust X-Forwarded-* so generated URLs and logged
+  # client IPs are the real ones.
+  forward-headers-strategy: framework
+  shutdown: graceful
+  error:
+    # Never echo stack traces or messages from the default error page. The messages here
+    # would be SQL.
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Explicit list, not `*`. Every exposed endpoint is attack surface; `env` and
+        # `configprops` in particular can disclose configuration.
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      # Details only for an authenticated operator; an anonymous probe sees UP/DOWN.
+      show-details: when-authorized
+      roles: OPERATOR
+      # Kubernetes-style /actuator/health/liveness and /readiness.
+      probes:
+        enabled: true
+  health:
+    # Do not report the service healthy while it is draining.
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  tracing:
+    sampling:
+      # 10% in production is a reasonable cost/visibility trade; overridden to 1.0 in the
+      # local and test profiles.
+      probability: ${TRACING_SAMPLE_RATE:0.1}
+  observations:
+    key-values:
+      application: ledger-service
+
+logging:
+  level:
+    root: INFO
+    io.vaullet.ledger: ${LOG_LEVEL:INFO}
+  # Trace and span ids in every line, so a log search and a trace view agree. ADR-011
+  # returns the same id as `trace_id` in every error body.
+  pattern:
+    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+
+# ---------------------------------------------------------------------------
+# Application-owned settings. Bound and validated by ApplicationProperties.
+#
+# Hold policy is deliberately absent: ADR-004 puts the ceiling in
+# ledger_config.max_hold_seconds, in the database, read inside the same transaction
+# that enforces it. Mirroring it here would give the ledger two sources of truth.
+# ---------------------------------------------------------------------------
+app:
+  environment: ${APP_ENVIRONMENT:unknown}
+  api:
+    # Empty by default: this service's callers are other services (ADR-008), not
+    # browsers, so CORS stays off unless a deployment explicitly opens it.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}

@@ -1,16 +1,19 @@
-# Compiled class file
+### Build output ###
+target/
+build/
+!**/src/main/**/target/
+!**/src/test/**/target/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### Maven wrapper ###
+.mvn/wrapper/maven-wrapper.jar
+
+### Java ###
 *.class
-
-# Log file
 *.log
-
-# BlueJ files
 *.ctxt
-
-# Mobile Tools for Java (J2ME)
 .mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
 *.nar
@@ -18,17 +21,47 @@
 *.zip
 *.tar.gz
 *.rar
-
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+!.mvn/wrapper/maven-wrapper.jar
 
-# Build output
-target/
-
-# IDE
-*.iml
+### IntelliJ IDEA ###
 .idea/
+*.iws
+*.iml
+*.ipr
 
-# OS
+### Eclipse / STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### OS ###
 .DS_Store
+
+### Local secrets / overrides — never commit these ###
+*.env
+.env.*
+application-local.yaml
+application-local.yml
+application-local.properties
+
+# ...except this one. The `local` profile is checked in deliberately: it is the profile
+# `./mvnw spring-boot:run` activates, so a clean checkout that lacks it starts with a
+# different security posture than the README describes. It holds no secrets — the local
+# database credentials live in compose.yaml, which is committed for the same reason.
+!src/main/resources/application-local.yaml

@@ -1,16 +1,15 @@
-package com.wallet.ledger;
+package io.vaullet.ledger.reservation;
+
+import io.vaullet.ledger.reservation.dao.LedgerRepository;
+import io.vaullet.ledger.reservation.service.LedgerService;
+import io.vaullet.ledger.support.IntegrationTest;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -27,17 +26,20 @@ import static org.assertj.core.api.Assertions.*;
  * <p>These are the tests the architecture was written to pass. The first one replays the exact
  * trace from ADR-001 — two withdrawals 50ms apart, not even concurrent — which is the scenario
  * that design's own opening paragraph described and its lock did not stop.
+ *
+ * <p>Runs under the composed {@code @IntegrationTest} annotation rather than a bare
+ * {@code @SpringBootTest} with its own {@code @Container}. Two reasons, both practical: a bare
+ * {@code @SpringBootTest} activates no profile, so the production {@code SecurityConfig} applies and
+ * the context refuses to start without an issuer — working as designed, but not what these tests are
+ * about. And Spring caches contexts by configuration, so a second, subtly different declaration here
+ * would start a second PostgreSQL and a second context for the same suite.
  */
-@SpringBootTest
-@Testcontainers
-class OverdraftTest {
-
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+@IntegrationTest
+class OverdraftIT {
 
     @Autowired LedgerService ledger;
     @Autowired JdbcTemplate jdbc;
+    @Autowired LedgerRepository journal;
 
     UUID account;
 
@@ -249,6 +251,65 @@ class OverdraftTest {
         assertThat(jdbc.queryForObject(
                 "SELECT state FROM reservations WHERE reservation_id = ?", String.class, r.reservationId()))
                 .isEqualTo("RELEASED");
+    }
+
+    // ---------------------------------------------------------------- settlement
+
+    @Test
+    @DisplayName("settling a hold spends the money — posted falls, available does not move")
+    void settleSpendsHeldMoney() {
+        var r = ledger.reserve(account, new BigDecimal("60.0000"), "settle-me", null);
+
+        var before = ledger.balance(account);
+        assertThat(before.posted()).isEqualByComparingTo("100.0000");
+        assertThat(before.held()).isEqualByComparingTo("60.0000");
+        assertThat(before.available()).isEqualByComparingTo("40.0000");
+
+        ledger.settle(r.reservationId(), UUID.randomUUID());
+
+        // The hold becomes a spend: 100 posted less the 60 captured, and the 60 that was held is
+        // no longer held. Available was already 40 before settlement and must not move — the
+        // money stopped being spendable when it was reserved, not when it was captured.
+        var after = ledger.balance(account);
+        assertThat(after.posted()).isEqualByComparingTo("40.0000");
+        assertThat(after.held()).isEqualByComparingTo("0.0000");
+        assertThat(after.available()).isEqualByComparingTo("40.0000");
+    }
+
+    @Test
+    @DisplayName("settlement journals one debit per bucket the hold drew from")
+    void settleJournalsOneDebitPerAllocation() {
+        jdbc.update("""
+                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, source_module, grant_id,
+                                             posted_balance, withdrawable, wagering_remaining, spend_priority)
+                VALUES (?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
+                """, UUID.randomUUID(), account, UUID.randomUUID());
+        jdbc.update("UPDATE account_balances SET posted_balance = posted_balance + 60.0000 WHERE account_id = ?",
+                account);
+
+        // 60 of bonus (priority 10) then 20 of cash (priority 100), as spendPriority... establishes.
+        var r = ledger.reserve(account, new BigDecimal("80.0000"), "journal-me", null);
+        var transaction = UUID.randomUUID();
+
+        ledger.settle(r.reservationId(), transaction);
+
+        // The journal is read through the repository rather than by querying ledger_entries here:
+        // what the entries mean is the dao layer's contract, and a service test that knew the
+        // column names would break on a schema change that changed no behaviour.
+        var entries = journal.entriesFor(r.reservationId());
+        assertThat(entries).hasSize(2);
+        assertThat(entries).allSatisfy(e -> {
+            assertThat(e.direction()).isEqualTo("DEBIT");
+            assertThat(e.transactionId()).isEqualTo(transaction);
+        });
+        assertThat(entries).extracting(LedgerRepository.JournalEntryRow::amount)
+                .usingComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                .containsExactlyInAnyOrder(new BigDecimal("60.0000"), new BigDecimal("20.0000"));
+
+        // Each debit lands on the bucket that funded it, not all on one.
+        assertThat(entries).extracting(LedgerRepository.JournalEntryRow::bucketId)
+                .containsExactlyInAnyOrderElementsOf(
+                        r.allocations().stream().map(LedgerService.Allocation::bucketId).toList());
     }
 
     // ---------------------------------------------------------------- fixtures

@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Deployed environments. Nothing here has a hard-coded value that differs
+# between staging and production — those come from the environment.
+# ---------------------------------------------------------------------------
+spring:
+  docker:
+    compose:
+      enabled: false
+
+logging:
+  structured:
+    # One JSON object per line, in Elastic Common Schema. Boot ships this natively, so
+    # log shipping needs neither logstash-logback-encoder nor a hand-written
+    # logback-spring.xml. Fields are stable and greppable, and the trace id is a
+    # first-class key rather than something inside a message string.
+    format:
+      console: ecs
+  level:
+    root: INFO
+    io.vaullet.ledger: INFO
+
+server:
+  tomcat:
+    # Sized against the database pool: threads that cannot get a connection are just a
+    # longer queue. With virtual threads enabled this is the accept limit.
+    threads:
+      max: 200
+    accesslog:
+      enabled: false
+
+management:
+  endpoint:
+    health:
+      show-details: when-authorized

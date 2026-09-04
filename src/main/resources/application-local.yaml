@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Developer machine. Activated automatically by `./mvnw spring-boot:run`
+# (see the spring-boot-maven-plugin block in pom.xml).
+#
+# Everything here trades safety for feedback speed. None of it applies to a
+# deployed environment, because a deployed environment never has this profile.
+# ---------------------------------------------------------------------------
+spring:
+  # spring-boot-docker-compose starts compose.yaml and points the datasource at it, so
+  # `spring-boot:run` on a clean checkout needs no manual `docker compose up`.
+  docker:
+    compose:
+      enabled: true
+      lifecycle-management: start-and-stop
+
+logging:
+  level:
+    io.vaullet.ledger: DEBUG
+    # The statements are the design (ADR-004), so seeing them is the point rather than a
+    # debugging last resort. Never enable in production: it logs parameter values, and
+    # here the parameters are account ids and amounts.
+    org.springframework.jdbc.core.JdbcTemplate: DEBUG
+    org.springframework.jdbc.core.StatementCreatorUtils: TRACE
+    org.springframework.web.servlet.mvc.method.annotation: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  tracing:
+    sampling:
+      probability: 1.0
+
+app:
+  environment: local
+  api:
+    allowed-origins: http://localhost:3000,http://localhost:5173

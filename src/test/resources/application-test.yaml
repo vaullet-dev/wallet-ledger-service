@@ -1,0 +1,34 @@
+# Overrides for the `test` profile. Kept minimal on purpose: the closer the test
+# configuration is to production configuration, the more the tests are worth.
+spring:
+  docker:
+    compose:
+      # Testcontainers owns the database in tests; Compose would be a second one.
+      enabled: false
+  flyway:
+    # Migrations run in tests too, so a broken migration fails the build rather than the
+    # deploy — and the tests assert against the schema that will actually ship. On this
+    # service the migration *is* most of the design: the CHECK constraints in
+    # V1__ledger.sql are what OverdraftIT proves cannot be bypassed.
+    enabled: true
+  datasource:
+    hikari:
+      # Deliberately NOT overridden away: the 1s statement_timeout from application.yaml
+      # applies in tests too, so a test that deadlocks fails in a second instead of
+      # hanging the build.
+      connection-init-sql: SET statement_timeout = '1s'
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+
+logging:
+  level:
+    org.testcontainers: WARN
+    com.github.dockerjava: WARN
+
+app:
+  environment: test
+  api:
+    allowed-origins: ""

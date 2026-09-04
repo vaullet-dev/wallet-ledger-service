@@ -1,0 +1,29 @@
+# Keeping current is the cheapest security work available: most CVEs in a Spring Boot
+# service arrive through transitive dependencies, and a service two minor versions
+# behind upgrades in an afternoon while one two majors behind is a project.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the whole Spring release train rather than fifteen — the modules are
+      # version-locked, so they can only be reviewed and merged together anyway.
+      spring:
+        patterns:
+          - 'org.springframework*'
+          - 'io.micrometer:*'
+      test-libraries:
+        patterns:
+          - 'org.junit*'
+          - 'org.mockito:*'
+          - 'org.assertj:*'
+          - 'org.testcontainers:*'
+          - 'com.tngtech.archunit:*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
