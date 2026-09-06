@@ -1,8 +1,8 @@
 package io.vaullet.ledger.reservation;
 
+import io.vaullet.common.test.IntegrationTest;
 import io.vaullet.ledger.reservation.dao.LedgerRepository;
 import io.vaullet.ledger.reservation.service.LedgerService;
-import io.vaullet.ledger.support.IntegrationTest;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

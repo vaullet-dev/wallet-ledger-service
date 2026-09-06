@@ -7,22 +7,25 @@
 #     A default is provided only where the default is safe everywhere.
 #   * Profile-specific overrides live in application-<profile>.yaml, never in
 #     if/else inside the application.
+#   * Anything the whole platform agrees on is imported, not restated. What is
+#     left in this file is what the ledger actually decides.
 # ---------------------------------------------------------------------------
 spring:
   application:
     name: ledger-service
 
-  main:
-    banner-mode: off
-
-  threads:
-    # Virtual threads (Java 21+). Each request gets its own carrier-free thread, so a
-    # blocking JDBC call no longer occupies a platform thread. This is what makes plain
-    # blocking Spring MVC scale like a reactive stack for I/O-bound work, without the
-    # debugging cost of WebFlux. Watch for `synchronized` blocks around blocking calls
-    # in older libraries — they pin the carrier thread.
-    virtual:
-      enabled: true
+  config:
+    # @vaullet-io/backend-common-web ships the platform defaults: virtual threads,
+    # snake_case JSON (ADR-011 §8), problem+json for framework errors, graceful
+    # shutdown, the Actuator exposure list, tracing sampling and the log correlation
+    # pattern. Read them at
+    # backend-common-web/src/main/resources/vaullet/platform-defaults.yaml.
+    #
+    # An imported document ranks BELOW the file importing it, so anything set here
+    # still wins. Importing explicitly rather than letting an auto-configuration set
+    # property defaults is deliberate: a reader of this file can follow one line to
+    # everything that is configured, instead of concluding from silence that nothing is.
+    import: "classpath:vaullet/platform-defaults.yaml"
 
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ledger}
@@ -57,23 +60,12 @@ spring:
     # style violation, it is a schema whose constraints nobody can vouch for.
     validate-on-migrate: true
 
-  jackson:
-    # ADR-011 fixes the external wire format as snake_case: reservation_id, expires_at,
-    # available_after. Setting it once here beats @JsonProperty on every component and
-    # makes it impossible for one endpoint to drift into camelCase.
-    property-naming-strategy: SNAKE_CASE
-    default-property-inclusion: non_null
-
   mvc:
-    # RFC 9457 problem+json for framework-raised errors too, so a malformed body and a
-    # 404 from Spring itself look like the errors ApiExceptionHandler produces.
-    problemdetails:
-      enabled: true
-    # Deliberately no `apiversion` block. The @vaullet-io template resolves the API
-    # version from an X-API-Version header; ADR-011 chose the major version in the URI
-    # path instead (/v1/reservations) and rejected header versioning outright, because a
-    # path is greppable in logs and dashboards while a missing header is an implicit
-    # version nobody notices. See WebMvcConfig.
+    # Deliberately no `apiversion` block, and none in the platform defaults either. The
+    # @vaullet-io template resolves the API version from an X-API-Version header;
+    # ADR-011 chose the major version in the URI path instead (/v1/reservations) and
+    # rejected header versioning outright, because a path is greppable in logs and
+    # dashboards while a missing header is an implicit version nobody notices.
 
   security:
     oauth2:
@@ -84,43 +76,14 @@ spring:
           issuer-uri: ${OAUTH2_ISSUER_URI:}
 
 server:
-  # Behind a load balancer or ingress, trust X-Forwarded-* so generated URLs and logged
-  # client IPs are the real ones.
-  forward-headers-strategy: framework
-  shutdown: graceful
   error:
-    # Never echo stack traces or messages from the default error page. The messages here
-    # would be SQL.
+    # Inherited from the platform defaults, restated here because the reason is sharper
+    # on this service than on any other: the messages would be SQL, and the statements
+    # are the design (ADR-004).
     include-message: never
     include-stacktrace: never
-    include-binding-errors: never
 
 management:
-  endpoints:
-    web:
-      exposure:
-        # Explicit list, not `*`. Every exposed endpoint is attack surface; `env` and
-        # `configprops` in particular can disclose configuration.
-        include: health,info,metrics,prometheus
-  endpoint:
-    health:
-      # Details only for an authenticated operator; an anonymous probe sees UP/DOWN.
-      show-details: when-authorized
-      roles: OPERATOR
-      # Kubernetes-style /actuator/health/liveness and /readiness.
-      probes:
-        enabled: true
-  health:
-    # Do not report the service healthy while it is draining.
-    livenessstate:
-      enabled: true
-    readinessstate:
-      enabled: true
-  tracing:
-    sampling:
-      # 10% in production is a reasonable cost/visibility trade; overridden to 1.0 in the
-      # local and test profiles.
-      probability: ${TRACING_SAMPLE_RATE:0.1}
   observations:
     key-values:
       application: ledger-service
@@ -129,29 +92,48 @@ logging:
   level:
     root: INFO
     io.vaullet.ledger: ${LOG_LEVEL:INFO}
-  # Trace and span ids in every line, so a log search and a trace view agree. ADR-011
-  # returns the same id as `trace_id` in every error body.
-  pattern:
-    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
-
-springdoc:
-  api-docs:
-    path: /v3/api-docs
-  swagger-ui:
-    path: /swagger-ui.html
-    operations-sorter: method
-    tags-sorter: alpha
 
 # ---------------------------------------------------------------------------
-# Application-owned settings. Bound and validated by ApplicationProperties.
+# Platform library settings (@vaullet-io/backend-common), bound and validated by
+# ApiProperties, OpenApiProperties and SecurityProperties.
 #
-# Hold policy is deliberately absent: ADR-004 puts the ceiling in
-# ledger_config.max_hold_seconds, in the database, read inside the same transaction
-# that enforces it. Mirroring it here would give the ledger two sources of truth.
+# The prefix is `vaullet` rather than `app` so that a reader can tell at a glance
+# which keys come from the shared library and which are this codebase's own. The
+# `app` block below is the ledger's whole share, and it is one label — ADR-004 puts
+# hold policy in ledger_config.max_hold_seconds, in the database, read inside the
+# same transaction that enforces it. Mirroring it here would give the ledger two
+# sources of truth for one rule.
 # ---------------------------------------------------------------------------
 app:
+  # Free-form environment label, interpolated into the OpenAPI description below.
   environment: ${APP_ENVIRONMENT:unknown}
+
+vaullet:
   api:
     # Empty by default: this service's callers are other services (ADR-008), not
     # browsers, so CORS stays off unless a deployment explicitly opens it.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+    # ADR-011 §2 puts the major version in the path; the library default already
+    # matches, and it is restated because CORS scope is worth being explicit about.
+    cors-path-pattern: /v1/**
+    allowed-methods: GET,POST,DELETE
+
+  security:
+    # What the @PreAuthorize rules in this service ask for. Under the `local` profile
+    # these are handed to the anonymous principal, so a developer exercises the real
+    # authorisation rules rather than a build with authorisation compiled out.
+    local:
+      anonymous-authorities: SCOPE_ledger:read,SCOPE_ledger:write,ROLE_OPERATOR
+
+  openapi:
+    title: Vaullet Ledger API
+    # The major version in the path (ADR-011). Compatible additions do not change it;
+    # a breaking change means /v2 and a 12-month deprecation window.
+    version: "1"
+    description: |
+      Atomic balance reservations — see ADR-004.
+
+      Money is a decimal string with an explicit currency, never a JSON number (ADR-011).
+      Timestamps are RFC 3339 UTC. Errors are RFC 9457 problem+json carrying a stable `code`.
+
+      Environment: ${app.environment}

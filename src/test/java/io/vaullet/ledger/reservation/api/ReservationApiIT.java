@@ -3,7 +3,7 @@ package io.vaullet.ledger.reservation.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 
-import io.vaullet.ledger.support.IntegrationTest;
+import io.vaullet.common.test.IntegrationTest;
 import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;

@@ -1,5 +1,6 @@
 package io.vaullet.ledger.common.error;
 
+import io.vaullet.common.error.ApplicationException;
 import java.io.Serial;
 import java.time.Duration;
 
@@ -19,12 +20,12 @@ public class HoldTtlTooLongException extends ApplicationException {
 
     public HoldTtlTooLongException(Duration requested, long maxHoldSeconds) {
         super(
-                ErrorType.HOLD_TTL_TOO_LONG,
+                LedgerErrorType.HOLD_TTL_TOO_LONG,
                 "A hold of %ds exceeds this deployment's ceiling of %ds"
                         .formatted(requested.getSeconds(), maxHoldSeconds));
     }
 
     public HoldTtlTooLongException(String message) {
-        super(ErrorType.HOLD_TTL_TOO_LONG, message);
+        super(LedgerErrorType.HOLD_TTL_TOO_LONG, message);
     }
 }

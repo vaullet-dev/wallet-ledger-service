@@ -1,5 +1,6 @@
 package io.vaullet.ledger.common.error;
 
+import io.vaullet.common.error.ApplicationException;
 import java.io.Serial;
 import java.math.BigDecimal;
 
@@ -20,11 +21,11 @@ public class InsufficientFundsException extends ApplicationException {
 
     public InsufficientFundsException(BigDecimal available, BigDecimal requested) {
         super(
-                ErrorType.INSUFFICIENT_FUNDS,
+                LedgerErrorType.INSUFFICIENT_FUNDS,
                 "Available balance %s is less than the requested %s".formatted(available, requested));
     }
 
     public InsufficientFundsException(String message) {
-        super(ErrorType.INSUFFICIENT_FUNDS, message);
+        super(LedgerErrorType.INSUFFICIENT_FUNDS, message);
     }
 }

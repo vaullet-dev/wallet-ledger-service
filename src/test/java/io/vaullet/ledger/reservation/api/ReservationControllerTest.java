@@ -8,8 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 
-import io.vaullet.ledger.config.MethodSecurityConfig;
-import io.vaullet.ledger.config.SecurityConfig;
+import io.vaullet.common.security.PlatformSecurityAutoConfiguration;
 import io.vaullet.ledger.reservation.service.LedgerService;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -19,8 +18,9 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.context.annotation.Import;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -35,16 +35,23 @@ import org.springframework.test.web.servlet.assertj.MockMvcTester;
  * a suite made only of full-context tests is slow and, when it breaks, tells you nothing about
  * where.
  *
- * <p>{@code SecurityConfig} is imported rather than disabled. Testing a controller with
+ * <p>The real security posture is imported rather than disabled. Testing a controller with
  * {@code addFilters = false} verifies an application that will never be deployed; the 401 and the
  * 403 below are the interesting assertions, not incidental ones.
+ *
+ * <p>It arrives as {@code @ImportAutoConfiguration} because the chain now lives in
+ * {@code backend-common-security}, and a {@code @WebMvcTest} slice loads only the auto-configurations
+ * Boot itself lists for the slice — never a third-party one. Naming it here is what keeps this test
+ * exercising the same filter chain, authority mapping and deny-by-default rules that run in
+ * production. The exception handler is not named: {@code LedgerApiExceptionHandler} is a
+ * {@code @RestControllerAdvice} in this codebase, and a web slice picks those up on its own.
  *
  * <p>What is deliberately <em>not</em> tested here: whether a reservation is correct. That is
  * {@code OverdraftIT}'s job, against a real database, because the invariant lives in the SQL. These
  * tests only prove the HTTP contract around it.
  */
 @WebMvcTest(ReservationController.class)
-@Import({SecurityConfig.class, MethodSecurityConfig.class})
+@ImportAutoConfiguration(PlatformSecurityAutoConfiguration.class)
 class ReservationControllerTest {
 
     private static final UUID ACCOUNT_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -159,6 +166,28 @@ class ReservationControllerTest {
                 .hasStatus(201);
 
         verify(ledger).reserve(ACCOUNT_ID, new BigDecimal("20.00"), "wager", Duration.ofDays(3));
+    }
+
+    @Test
+    @DisplayName("a contended account row is 503 ACCOUNT_BUSY with Retry-After, not 500")
+    void lockContentionKeepsTheLedgersOwnCode() {
+        // backend-common answers a contended row with RESOURCE_BUSY. ACCOUNT_BUSY is published in
+        // this service's contract, so LedgerApiExceptionHandler overrides it — and this is the test
+        // that fails if that override is ever dropped along with the class.
+        when(ledger.reserve(any(), any(), any(), any()))
+                .thenThrow(new CannotAcquireLockException("could not obtain lock on row of \"account_balances\""));
+
+        var result = assertThat(mvc.post()
+                        .uri("/v1/reservations")
+                        .header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY)
+                        .with(jwt().authorities(() -> WRITE)))
+                .hasStatus(503);
+
+        result.headers().hasHeaderSatisfying("Retry-After", values -> assertThat(values.getFirst())
+                .isEqualTo("1"));
+        result.bodyJson().extractingPath("$.code").isEqualTo("ACCOUNT_BUSY");
     }
 
     @Test

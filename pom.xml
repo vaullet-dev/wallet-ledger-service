@@ -22,30 +22,46 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <!-- Versions not managed by the Spring Boot BOM -->
+    <backend-common.version>0.1.0-SNAPSHOT</backend-common.version>
     <springdoc.version>3.1.0</springdoc.version>
-    <archunit.version>1.4.1</archunit.version>
   </properties>
 
-  <dependencies>
-    <!-- ============================== Web ============================== -->
-    <!-- Boot 4 renamed spring-boot-starter-web -> spring-boot-starter-webmvc -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-webmvc</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-validation</artifactId>
-    </dependency>
+  <dependencyManagement>
+    <dependencies>
+      <!--
+        One version for the whole backend-common set. They share the ErrorType interface and the
+        `vaullet.*` property prefix, so a mixed combination is not a supported one — importing the
+        BOM makes that impossible to get wrong by accident.
+      -->
+      <dependency>
+        <groupId>io.vaullet</groupId>
+        <artifactId>backend-common-bom</artifactId>
+        <version>${backend-common.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
-    <!-- ============================ Security ============================ -->
+  <dependencies>
+    <!-- ========================= Platform common ========================= -->
+    <!--
+      The HTTP edge and the security posture, from @vaullet-io/backend-common. These bring
+      spring-boot-starter-webmvc, -validation, -security and -security-oauth2-resource-server
+      transitively, which is why those four are no longer declared here: the modules that need
+      them own their versions and their configuration together.
+
+      What the ledger gets, and no longer maintains a copy of: RFC 9457 problem+json in the shape
+      ADR-011 §7 fixes, the deny-by-default stateless JWT chain (ADR-006), the Keycloak claim
+      mapping, method security, CORS, and the OpenAPI bearer scheme.
+    -->
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-security</artifactId>
+      <groupId>io.vaullet</groupId>
+      <artifactId>backend-common-web</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+      <groupId>io.vaullet</groupId>
+      <artifactId>backend-common-security</artifactId>
     </dependency>
 
     <!-- ========================== Observability ========================== -->
@@ -68,6 +84,11 @@
     </dependency>
 
     <!-- ============================== Docs ============================== -->
+    <!--
+      Declared here even though backend-common-web configures it: the dependency is <optional>
+      there, so a service without a published contract does not pay for it. Asking for springdoc
+      is what switches OpenApiConfiguration on.
+    -->
     <dependency>
       <groupId>org.springdoc</groupId>
       <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
@@ -110,7 +131,24 @@
     </dependency>
 
     <!-- ============================= Testing ============================= -->
-    <!-- Boot 4 splits the old spring-boot-starter-test into per-module test starters -->
+    <!--
+      backend-common-test brings the composed @IntegrationTest, the shared PostgreSQL container,
+      the JwtDecoder stand-in and the ArchUnit rule set — and with them spring-boot-testcontainers,
+      testcontainers-postgresql, the webmvc and security test starters, and ArchUnit itself. Scope
+      is `test` here, which is where every one of those transitively lands.
+    -->
+    <dependency>
+      <groupId>io.vaullet</groupId>
+      <artifactId>backend-common-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!--
+      Service-specific test support, deliberately not in the shared module. Boot 4 splits the old
+      spring-boot-starter-test into per-module test starters, and these four follow this service's
+      own choices: JDBC over JPA (ADR-004), Flyway migrations that the tests assert against, and
+      the tracing bridge whose trace id ends up in every error body.
+    -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc-test</artifactId>
@@ -123,54 +161,12 @@
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-testcontainers</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>testcontainers-junit-jupiter</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>testcontainers-postgresql</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-webmvc-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-validation-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-security-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-security-oauth2-resource-server-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator-test</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-micrometer-tracing-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <!-- Fails the build when the layering rules in the README are violated -->
-    <dependency>
-      <groupId>com.tngtech.archunit</groupId>
-      <artifactId>archunit-junit5</artifactId>
-      <version>${archunit.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

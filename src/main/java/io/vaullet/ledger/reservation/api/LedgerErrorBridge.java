@@ -1,8 +1,10 @@
 package io.vaullet.ledger.reservation.api;
 
 import io.micrometer.tracing.Tracer;
-import io.vaullet.ledger.common.error.ErrorType;
-import io.vaullet.ledger.common.error.ProblemDetails;
+import io.vaullet.common.error.CommonErrorType;
+import io.vaullet.common.error.ErrorType;
+import io.vaullet.common.web.ProblemDetails;
+import io.vaullet.ledger.common.error.LedgerErrorType;
 import io.vaullet.ledger.reservation.service.LedgerService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,12 +28,12 @@ import org.springframework.web.context.request.WebRequest;
  *
  * <p>The end state is the one the template describes: the service throws
  * {@code InsufficientFundsException}, {@code HoldTtlTooLongException} and
- * {@code ResourceNotFoundException} from {@code common/error}, {@code ApiExceptionHandler}'s single
+ * {@code ResourceNotFoundException} from {@code backend-common}, the single
  * {@code ApplicationException} handler covers all of them, the {@code @PreAuthorize} rules move
  * from the controllers down onto the service methods they protect, and this file goes away. The
  * mapping below is deliberately mechanical so that change is a deletion rather than a rewrite.
  *
- * <p>{@code @Order(HIGHEST_PRECEDENCE)} matters: {@code ApiExceptionHandler} has a catch-all
+ * <p>{@code @Order(HIGHEST_PRECEDENCE)} matters: {@code LedgerApiExceptionHandler} has a catch-all
  * {@code @ExceptionHandler(Exception.class)}, and Spring consults advices in order. Without this,
  * the catch-all would win and every ledger error would be a 500 — the exact bug this class exists
  * to prevent.
@@ -55,17 +57,17 @@ class LedgerErrorBridge {
     @ExceptionHandler(LedgerService.InsufficientFunds.class)
     ProblemDetail handleInsufficientFunds(LedgerService.InsufficientFunds ex, WebRequest request) {
         log.debug("Reservation refused: {}", ex.getMessage());
-        return ProblemDetails.create(ErrorType.INSUFFICIENT_FUNDS, ex.getMessage(), request, tracer);
+        return ProblemDetails.create(LedgerErrorType.INSUFFICIENT_FUNDS, ex.getMessage(), request, tracer);
     }
 
     @ExceptionHandler(LedgerService.HoldTtlTooLong.class)
     ProblemDetail handleHoldTtlTooLong(LedgerService.HoldTtlTooLong ex, WebRequest request) {
-        return ProblemDetails.create(ErrorType.HOLD_TTL_TOO_LONG, ex.getMessage(), request, tracer);
+        return ProblemDetails.create(LedgerErrorType.HOLD_TTL_TOO_LONG, ex.getMessage(), request, tracer);
     }
 
     @ExceptionHandler(LedgerService.AccountNotFound.class)
     ProblemDetail handleAccountNotFound(LedgerService.AccountNotFound ex, WebRequest request) {
-        return ProblemDetails.create(ErrorType.RESOURCE_NOT_FOUND, "Account was not found", request, tracer);
+        return ProblemDetails.create(CommonErrorType.RESOURCE_NOT_FOUND, "Account was not found", request, tracer);
     }
 
     /**
@@ -79,6 +81,6 @@ class LedgerErrorBridge {
     ProblemDetail handleMissingRow(EmptyResultDataAccessException ex, WebRequest request) {
         log.debug("Addressed a row that does not exist", ex);
         return ProblemDetails.create(
-                ErrorType.RESOURCE_NOT_FOUND, "The requested resource was not found", request, tracer);
+                CommonErrorType.RESOURCE_NOT_FOUND, "The requested resource was not found", request, tracer);
     }
 }

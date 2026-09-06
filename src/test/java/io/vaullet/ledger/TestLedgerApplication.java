@@ -1,6 +1,6 @@
 package io.vaullet.ledger;
 
-import io.vaullet.ledger.support.TestcontainersConfiguration;
+import io.vaullet.common.test.PostgresContainerConfiguration;
 import org.springframework.boot.SpringApplication;
 
 /**
@@ -22,7 +22,7 @@ public final class TestLedgerApplication {
 
     public static void main(String[] args) {
         SpringApplication.from(LedgerApplication::main)
-                .with(TestcontainersConfiguration.class)
+                .with(PostgresContainerConfiguration.class)
                 .run(concat(args, "--spring.profiles.active=local"));
     }
 

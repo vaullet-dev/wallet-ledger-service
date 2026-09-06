@@ -30,5 +30,12 @@ logging:
 
 app:
   environment: test
+
+vaullet:
   api:
     allowed-origins: ""
+  test:
+    # Pinned to the tag compose.yaml uses, so a behaviour that passes locally and
+    # fails in CI cannot be a version difference.
+    postgres:
+      image: postgres:18-alpine
