@@ -1,8 +1,14 @@
-# Continuous integration.
+# Continuous integration, and the release.
 #
-# One job, not three. Splitting build / test / verify across jobs looks tidy and then
-# spends more wall-clock time re-downloading dependencies and re-compiling than the
-# tests themselves take. Split when a stage is genuinely slow enough to parallelise.
+# One workflow, because the release is not a separate event: every commit that reaches main
+# IS a release, at a level the commit messages already declared, and the image it produces is
+# what a GitOps manifest will pin. Splitting that in two would let a green main and an
+# unpublished image coexist — a state nobody notices until a rollback needs the image to be
+# there.
+#
+# One build job, not three. Splitting build / test / verify across jobs looks tidy and then
+# spends more wall-clock time re-downloading dependencies and re-compiling than the tests
+# themselves take. Split when a stage is genuinely slow enough to parallelise.
 name: CI
 
 on:
@@ -10,22 +16,62 @@ on:
     branches: [master, main]
   pull_request:
 
-# A new push to the same branch cancels the run already in flight — the result of the
-# older commit is not information anyone will act on.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A superseded branch build is not information anyone will act on, so cancel it. A release
+  # in flight is a different matter: cancelling between the image push and the tag leaves a
+  # published image that no tag names.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
 permissions:
   contents: read
+  # Read-only, and only so Maven can resolve dev.vaullet:common-* from GHCR Maven.
+  packages: read
 
 jobs:
+  # The version comes from the commit log, so an unreadable message is a build error, not a
+  # style nit: it contributes nothing to the level, and "nothing" is indistinguishable from a
+  # deliberate chore. The pull request is the last point at which it is cheap to fix.
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Every commit declares its release level
+        run: scripts/version.sh lint "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      # On a squash merge the pull request title becomes the only commit on main, so it is the
+      # title that has to parse. Checked separately because the branch commits may all be
+      # perfect and the title still be "address review comments".
+      - name: The pull request title declares its release level
+        run: scripts/version.sh lint-subject "$PR_TITLE"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # version.sh reads the tags and the whole log since the last one, and
+          # git-commit-id stamps the SHA into /actuator/info. A shallow clone breaks both.
+          fetch-depth: 0
+
+      # A committed -SNAPSHOT would be a mutable coordinate, and this service has none: main
+      # releases X.Y.Z and a branch builds X.Y.Z-<branch>-<n>. Cheaper to assert than to
+      # explain later why two deployments of one version behave differently.
+      - name: No SNAPSHOT version, anywhere
+        run: |
+          if grep -nE "<(revision|common\.version)>.*SNAPSHOT" pom.xml; then
+            echo "::error::A version is a SNAPSHOT. Neither this service nor its library uses them."
+            exit 1
+          fi
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -35,12 +81,34 @@ jobs:
           # Caches ~/.m2 keyed on the POM. Without it, every run re-downloads the
           # dependency tree, which for a Spring Boot service is minutes per run.
           cache: maven
+          # dev.vaullet:common-* lives in GHCR Maven, which requires auth even for a public
+          # read. This writes the settings.xml `github` server that the <repositories> block
+          # in the POM expects; the credentials come from the env below, never from a file.
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      # A pull request builds as the pre-release it would become — 0.2.0-holds-7, not a
+      # placeholder — so the version machinery is exercised by every run rather than only by
+      # the release that depends on it.
+      - name: Work out this build's version
+        id: version
+        run: |
+          VERSION="$(scripts/version.sh)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          scripts/version.sh explain | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
 
       # No service container for PostgreSQL: Testcontainers starts one from the same
       # definition the tests use locally, so CI and a laptop cannot drift apart.
       # Docker is available on ubuntu-latest out of the box.
       - name: Build, test and verify
-        run: ./mvnw -B --no-transfer-progress verify
+        run: ./mvnw -B --no-transfer-progress -Drevision="$VERSION" verify
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish test report
         # Runs even when the build failed — a red run with no visible reason is worse
@@ -62,3 +130,120 @@ jobs:
             target/failsafe-reports/
           retention-days: 7
           if-no-files-found: ignore
+
+  # Main is released, not merged-and-forgotten: it builds the image, pushes it under an
+  # immutable tag, and only then writes the git tag — so a tag always names an image that
+  # exists, and a manifest pinning that tag can always be rolled back to.
+  release:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Writing the git tag and the GitHub release.
+      contents: write
+      # Reading dev.vaullet:common-* from GHCR Maven AND pushing the image to GHCR.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the version from the commit log
+        id: version
+        run: |
+          BUMP="$(scripts/version.sh bump)"
+          scripts/version.sh explain | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$BUMP" = "none" ]; then
+            echo "Only chore/docs/test/ci/style commits since the last release. Nothing to ship."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="$(scripts/version.sh)"
+          TAG="$(scripts/version.sh tag)"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists. Two releases computed the same number."
+            exit 1
+          fi
+          {
+            echo "publish=true"
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "bump=$BUMP"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.publish == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # The runner is x86_64, which is what the cluster runs, so imagePlatform costs nothing
+      # here — unlike on an arm64 laptop, where it is the difference between an image that
+      # runs and one that dies with an exec-format error.
+      - name: Build the image
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          ./mvnw -B --no-transfer-progress \
+            -Drevision="$VERSION" -Dimage.owner="$IMAGE_OWNER" \
+            -DskipTests spring-boot:build-image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          # Named after the org this workflow is running in, not a string in the POM. The org
+          # has been renamed once already and GHCR does not follow the redirect.
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The immutable tag is what a GitOps manifest pins and what an incident is traced back
+      # to. `latest` is pushed for a human pulling by hand and must never appear in a manifest:
+      # a mutable tag makes "which code is running" unanswerable and a rollback a guess.
+      - name: Push the image
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          IMAGE="ghcr.io/$IMAGE_OWNER/ledger-service"
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"
+          {
+            echo "### Image"
+            echo '```'
+            echo "$IMAGE:$VERSION"
+            docker image inspect "$IMAGE:$VERSION" --format 'platform: {{.Os}}/{{.Architecture}}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+
+      # Tag last. A tag written before the push would name an image that may not exist, and the
+      # next run would compute the version after it — silently skipping the gap.
+      - name: Tag the release
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG ($BUMP)"
+          git push origin "$TAG"
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          BUMP: ${{ steps.version.outputs.bump }}
+
+      - name: Create the GitHub release
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          gh release create "$TAG" --title "$TAG" --generate-notes \
+            --notes-start-tag "$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo '')" || \
+          gh release create "$TAG" --title "$TAG" --generate-notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

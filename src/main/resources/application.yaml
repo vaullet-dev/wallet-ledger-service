@@ -15,7 +15,7 @@ spring:
     name: ledger-service
 
   config:
-    # @vaullet-io/backend-common-web ships the platform defaults: virtual threads,
+    # @vaullet-dev/backend-common-web ships the platform defaults: virtual threads,
     # snake_case JSON (ADR-011 §8), problem+json for framework errors, graceful
     # shutdown, the Actuator exposure list, tracing sampling and the log correlation
     # pattern. Read them at
@@ -62,7 +62,7 @@ spring:
 
   mvc:
     # Deliberately no `apiversion` block, and none in the platform defaults either. The
-    # @vaullet-io template resolves the API version from an X-API-Version header;
+    # @vaullet-dev template resolves the API version from an X-API-Version header;
     # ADR-011 chose the major version in the URI path instead (/v1/reservations) and
     # rejected header versioning outright, because a path is greppable in logs and
     # dashboards while a missing header is an implicit version nobody notices.
@@ -84,6 +84,16 @@ server:
     include-stacktrace: never
 
 management:
+  # /actuator/info is the answer to "which build is actually running", asked at 03:00 by someone
+  # who cannot trust the image tag. The build and git contributors are on by default once
+  # build-info.properties and git.properties exist in the jar, which the POM arranges.
+  #
+  # `full` rather than the default `simple` git mode: the abbreviated SHA is fine for a human
+  # reading a dashboard and ambiguous for anything that has to check out the code again.
+  info:
+    git:
+      mode: full
+
   observations:
     key-values:
       application: ledger-service
@@ -91,10 +101,10 @@ management:
 logging:
   level:
     root: INFO
-    io.vaullet.ledger: ${LOG_LEVEL:INFO}
+    dev.vaullet.ledger: ${LOG_LEVEL:INFO}
 
 # ---------------------------------------------------------------------------
-# Platform library settings (@vaullet-io/backend-common), bound and validated by
+# Platform library settings (@vaullet-dev/backend-common), bound and validated by
 # ApiProperties, OpenApiProperties and SecurityProperties.
 #
 # The prefix is `vaullet` rather than `app` so that a reader can tell at a glance

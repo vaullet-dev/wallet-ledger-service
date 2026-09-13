@@ -17,7 +17,7 @@ logging:
       console: ecs
   level:
     root: INFO
-    io.vaullet.ledger: INFO
+    dev.vaullet.ledger: INFO
 
 server:
   tomcat:

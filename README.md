@@ -6,11 +6,11 @@ The Vaullet ledger: atomic balance reservations, per
 This is the only place the balance invariant is decided. Everything else in the platform asks this
 service whether money is available, and it answers by holding it.
 
-Built on the [`@vaullet-io` spring-boot-template](../../spring-boot-template) — Spring Boot 4.1.1,
+Built on the [`@vaullet-dev` spring-boot-template](../../spring-boot-template) — Spring Boot 4.1.1,
 Java 21, three layers (`api` → `service` → `dao`) enforced by ArchUnit — with two deliberate
 departures, both documented below.
 
-The cross-cutting plumbing comes from [`@vaullet-io/backend-common`](../backend-common)
+The cross-cutting plumbing comes from [`@vaullet-dev/backend-common`](../backend-common)
 ([ADR-013](../architecture/docs/adr/013-backend-common-shared-library.md)): the problem+json error
 body, the JWT security chain, CORS, the OpenAPI bearer scheme, the composed `@IntegrationTest` and
 the ArchUnit rules. **What is left in this repository is the ledger**, plus the handful of places it
@@ -22,9 +22,10 @@ deliberately differs from the platform default.
 ./mvnw verify              # adds 18 integration tests on real PostgreSQL     (~15s)
 ```
 
-> While `backend-common` is on `0.1.0-SNAPSHOT` it resolves from the local repository only, so a
-> fresh clone needs `(cd ../backend-common && ./mvnw install)` once before the first build. That goes
-> away when `0.1.0` is published to GHCR Maven.
+> Until `backend-common` has published anything, `0.1.0-SNAPSHOT` resolves from the local repository
+> only, so a fresh clone needs `(cd ../backend-common && ./mvnw install)` once before the first
+> build. Its `main` branch is now set up to publish snapshots to GHCR Maven, which removes that step
+> as soon as the first run lands.
 
 Then open <http://localhost:8080/swagger-ui.html>.
 
@@ -63,7 +64,7 @@ Wire conventions, all from ADR-011 §7–8:
 
 ```json
 {
-  "type": "https://docs.vaullet/errors/insufficient-funds",
+  "type": "https://docs.vaullet.dev/errors/insufficient-funds",
   "title": "Insufficient funds",
   "status": 409,
   "detail": "available 40.0000 < requested 60.0000",
@@ -110,7 +111,7 @@ this service's contract, and renaming a published code is a breaking change unde
 ## Package structure
 
 ```
-io.vaullet.ledger
+dev.vaullet.ledger
 ├── LedgerApplication.java            entry point: capabilities only, no beans
 ├── package-info.java                 @NullMarked — JSpecify null-safety for the whole tree
 │
@@ -129,12 +130,12 @@ io.vaullet.ledger
 
 **There is no `config/` package.** It held six classes — `SecurityConfig`, `LocalSecurityConfig`,
 `MethodSecurityConfig`, `WebMvcConfig`, `OpenApiConfig`, `ApplicationProperties` — and all six were
-near-identical to the template's copies. They are now auto-configured by `backend-common-web` and
-`backend-common-security`, and configured through `vaullet.*` keys in `application.yaml`. Likewise
+near-identical to the template's copies. They are now auto-configured by `common-web` and
+`common-security`, and configured through `vaullet.*` keys in `application.yaml`. Likewise
 `common/error` no longer holds `ErrorType`, `ApplicationException`, `ProblemDetails`,
 `ApiExceptionHandler` or `ResourceNotFoundException`; what remains is the part that is about money.
 
-`ErrorType` is an interface in `backend-common-core`, which is what lets `LedgerErrorType` exist at
+`ErrorType` is an interface in `common-core`, which is what lets `LedgerErrorType` exist at
 all. The platform catalogue holds only what a service that knows nothing about money would raise —
 see [ADR-013 §3](../architecture/docs/adr/013-backend-common-shared-library.md).
 
@@ -144,7 +145,7 @@ service layer touches a servlet type, or if anyone uses field injection. Documen
 architecture decays; the first PR that skips a layer "just this once" gets approved by someone in a
 hurry.
 
-The rules themselves come from `ArchitectureRules` in `backend-common-test`, so `LayeringTest` is
+The rules themselves come from `ArchitectureRules` in `common-test`, so `LayeringTest` is
 the lines that point them at this codebase plus the one rule that is genuinely local (the JDBC one
 below). A rule that is copied is a rule that gets edited locally, and a boundary each service defines
 slightly differently is not a platform boundary.
@@ -236,7 +237,7 @@ the build in a second instead of hanging it.
 
 ## Security
 
-The chain itself is `backend-common-security`, which is ADR-006's posture written once for the whole
+The chain itself is `common-security`, which is ADR-006's posture written once for the whole
 platform. What this service contributes is the scopes.
 
 - **Deny by default** — the chain ends in `anyRequest().authenticated()`.
@@ -250,7 +251,7 @@ platform. What this service contributes is the scopes.
 mapping read realm roles from a top-level `roles` claim. ADR-006 has Keycloak emit them under
 `realm_access.roles`, so `hasRole(...)` would never have matched a real token — silently, with no
 exception and no log line. The shared mapper reads the nested path, and
-`JwtAuthorityMapperTest` in `backend-common-security` pins it. Nothing in this service's suite
+`JwtAuthorityMapperTest` in `common-security` pins it. Nothing in this service's suite
 covered it, which is exactly why it survived: a test suite does not examine code the service acquired
 by copy-paste.
 
