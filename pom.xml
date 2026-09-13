@@ -68,7 +68,7 @@
       by itself, a change to this service's own API.
     -->
     <common.version>0.1.0</common.version>
-    <springdoc.version>3.1.0</springdoc.version>
+    <springdoc.version>3.1.1</springdoc.version>
     <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
   </properties>
 
