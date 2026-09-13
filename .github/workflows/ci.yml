@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: '21'
           distribution: temurin
@@ -175,7 +175,7 @@ jobs:
 
       - name: Set up JDK
         if: steps.version.outputs.publish == 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: '21'
           distribution: temurin
