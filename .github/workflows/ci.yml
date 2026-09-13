@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # version.sh reads the tags and the whole log since the last one, and
           # git-commit-id stamps the SHA into /actuator/info. A shallow clone breaks both.
@@ -146,7 +146,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
