@@ -39,7 +39,9 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.json.AbstractJsonContentAssert;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResultAssert;
 
 /**
  * Web slice for {@code /v1/wallets}: routing, validation, the real security chain and the real error
@@ -96,7 +98,7 @@ class WalletControllerTest {
     @Test
     @DisplayName("opening, freezing and closing need ledger:write — a read token changes nothing")
     void changesNeedTheWriteScope() {
-        var refused = assertThat(mvc.post()
+        MvcTestResultAssert refused = assertThat(mvc.post()
                         .uri("/v1/wallets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(OPEN_REAL)
@@ -138,7 +140,7 @@ class WalletControllerTest {
         when(wallets.open(ACCOUNT_ID, WalletType.REAL))
                 .thenReturn(new WalletService.Opened(wallet(WalletType.REAL, WalletStatus.ACTIVE), true));
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/wallets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(OPEN_REAL)
@@ -162,7 +164,7 @@ class WalletControllerTest {
         when(wallets.open(ACCOUNT_ID, WalletType.REAL))
                 .thenReturn(new WalletService.Opened(wallet(WalletType.REAL, WalletStatus.FROZEN), false));
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/wallets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(OPEN_REAL)
@@ -179,7 +181,7 @@ class WalletControllerTest {
     @ValueSource(strings = {"\"GOLD\"", "\"real\"", "\"\"", "null"})
     @DisplayName("a type that is not REAL or BONUS is VALIDATION_FAILED naming the field, before the service runs")
     void validatesTheType(String type) {
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/wallets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -196,7 +198,7 @@ class WalletControllerTest {
     @Test
     @DisplayName("an open request without an account is VALIDATION_FAILED")
     void requiresTheAccount() {
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/wallets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -213,7 +215,7 @@ class WalletControllerTest {
     void aClosedWalletCannotBeReopened() {
         when(wallets.open(ACCOUNT_ID, WalletType.REAL)).thenThrow(new WalletClosedException(WALLET_ID));
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/wallets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(OPEN_REAL)
@@ -230,11 +232,12 @@ class WalletControllerTest {
     @Test
     @DisplayName("search passes every filter and the page through, and answers {data, next_cursor}")
     void searchesWallets() {
-        var search = new WalletSearch(ACCOUNT_ID, WalletType.BONUS, WalletStatus.FROZEN, 10, "the-previous-cursor");
+        WalletSearch search =
+                new WalletSearch(ACCOUNT_ID, WalletType.BONUS, WalletStatus.FROZEN, 10, "the-previous-cursor");
         when(wallets.search(search))
                 .thenReturn(new WalletPage(List.of(wallet(WalletType.BONUS, WalletStatus.FROZEN)), "the-next-cursor"));
 
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/wallets?account_id={account}&type=BONUS&status=FROZEN&limit=10&cursor=the-previous-cursor",
                                 ACCOUNT_ID)
                         .with(jwt().authorities(() -> READ)))
@@ -250,7 +253,7 @@ class WalletControllerTest {
     void searchDefaults() {
         when(wallets.search(any())).thenReturn(new WalletPage(List.of(), null));
 
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/wallets?type=&cursor=")
                         .with(jwt().authorities(() -> READ)))
                 .hasStatusOk();
@@ -272,7 +275,7 @@ class WalletControllerTest {
     })
     @DisplayName("a bad query parameter is VALIDATION_FAILED naming it, before the service runs")
     void validatesTheSearch(String query, String field) {
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/wallets?" + query)
                         .with(jwt().authorities(() -> READ)))
                 .hasStatus(400)
@@ -289,7 +292,7 @@ class WalletControllerTest {
     void refusesAForeignCursor() {
         when(wallets.search(any())).thenThrow(new UnrecognisedCursor());
 
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/wallets?cursor=not-one-of-ours")
                         .with(jwt().authorities(() -> READ)))
                 .hasStatus(400);
@@ -304,7 +307,7 @@ class WalletControllerTest {
     void fetchesAWallet() {
         when(wallets.get(WALLET_ID)).thenReturn(closedBonusWallet());
 
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/wallets/{id}", WALLET_ID)
                         .with(jwt().authorities(() -> READ)))
                 .hasStatusOk();
@@ -316,7 +319,7 @@ class WalletControllerTest {
     @Test
     @DisplayName("an unknown wallet is 404 RESOURCE_NOT_FOUND on every route that names one")
     void anUnknownWalletIsNotFound() {
-        var missing = new ResourceNotFoundException("Wallet", WALLET_ID);
+        ResourceNotFoundException missing = new ResourceNotFoundException("Wallet", WALLET_ID);
         when(wallets.get(WALLET_ID)).thenThrow(missing);
         when(wallets.balance(WALLET_ID)).thenThrow(missing);
         when(wallets.changeStatus(WALLET_ID, WalletStatus.FROZEN)).thenThrow(missing);
@@ -345,7 +348,7 @@ class WalletControllerTest {
     @ValueSource(strings = {"FROZEN", "ACTIVE"})
     @DisplayName("PATCH freezes and unfreezes, and answers with the wallet")
     void changesTheStatus(String status) {
-        var target = WalletStatus.valueOf(status);
+        WalletStatus target = WalletStatus.valueOf(status);
         when(wallets.changeStatus(WALLET_ID, target)).thenReturn(wallet(WalletType.REAL, target));
 
         assertThat(mvc.patch()
@@ -366,7 +369,7 @@ class WalletControllerTest {
     @ValueSource(strings = {"{\"status\":\"CLOSED\"}", "{\"status\":\"PAUSED\"}", "{\"status\":\"frozen\"}", "{}"})
     @DisplayName("CLOSED, an unknown status and a missing one are all VALIDATION_FAILED — closing is DELETE")
     void patchCannotClose(String body) {
-        var result = assertThat(mvc.patch()
+        MvcTestResultAssert result = assertThat(mvc.patch()
                         .uri("/v1/wallets/{id}", WALLET_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body)
@@ -415,7 +418,7 @@ class WalletControllerTest {
                 .when(wallets)
                 .close(WALLET_ID);
 
-        var result = assertThat(mvc.delete()
+        MvcTestResultAssert result = assertThat(mvc.delete()
                         .uri("/v1/wallets/{id}", WALLET_ID)
                         .with(jwt().authorities(() -> WRITE)))
                 .hasStatus(409)
@@ -451,12 +454,12 @@ class WalletControllerTest {
                         new BigDecimal("0.0000"),
                         null))));
 
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/wallets/{id}/balance", WALLET_ID)
                         .with(jwt().authorities(() -> READ)))
                 .hasStatusOk();
 
-        var json = result.bodyJson();
+        AbstractJsonContentAssert<?> json = result.bodyJson();
         json.extractingPath("$.wallet_id").isEqualTo(WALLET_ID.toString());
         json.extractingPath("$.currency").isEqualTo("EUR");
         // A JSON number here would be a rounding defect waiting for a client with binary floats.
@@ -496,7 +499,7 @@ class WalletControllerTest {
                         new BigDecimal("250.0000"),
                         Instant.parse("2026-11-12T23:59:59Z")))));
 
-        var json = assertThat(mvc.get()
+        AbstractJsonContentAssert<?> json = assertThat(mvc.get()
                         .uri("/v1/wallets/{id}/balance", WALLET_ID)
                         .with(jwt().authorities(() -> READ)))
                 .hasStatusOk()

@@ -17,6 +17,7 @@ import dev.vaullet.ledger.reservation.service.LedgerService;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.Function;
@@ -76,7 +78,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("opening a REAL wallet opens the account in the ledger and gives the wallet its CASH bucket")
     void openingRealOpensTheAccountWithCash() {
-        var opened = wallets.open(account, WalletType.REAL);
+        WalletService.Opened opened = wallets.open(account, WalletType.REAL);
 
         assertThat(opened.created()).isTrue();
         assertThat(opened.wallet().accountId()).isEqualTo(account);
@@ -100,7 +102,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("a BONUS wallet starts without buckets: grants add them, one per grant")
     void openingBonusCreatesNoBucket() {
-        var opened = wallets.open(account, WalletType.BONUS);
+        WalletService.Opened opened = wallets.open(account, WalletType.BONUS);
 
         assertThat(opened.created()).isTrue();
         assertThat(wallets.balance(opened.wallet().walletId()).buckets()).isEmpty();
@@ -110,13 +112,13 @@ class WalletServiceIT {
     @Test
     @DisplayName("opening again returns the wallet already there, frozen or not, and creates nothing")
     void openIsIdempotent() {
-        var first = wallets.open(account, WalletType.REAL);
-        var again = wallets.open(account, WalletType.REAL);
+        WalletService.Opened first = wallets.open(account, WalletType.REAL);
+        WalletService.Opened again = wallets.open(account, WalletType.REAL);
 
         assertThat(again.created()).isFalse();
         assertThat(again.wallet()).isEqualTo(first.wallet());
 
-        var frozen = wallets.changeStatus(first.wallet().walletId(), WalletStatus.FROZEN);
+        Wallet frozen = wallets.changeStatus(first.wallet().walletId(), WalletStatus.FROZEN);
         assertThat(wallets.open(account, WalletType.REAL)).isEqualTo(new WalletService.Opened(frozen, false));
 
         assertThat(jdbc.queryForObject("SELECT count(*) FROM wallets", Integer.class)).isOne();
@@ -126,8 +128,8 @@ class WalletServiceIT {
     @Test
     @DisplayName("an account has one wallet of each type, and the schema refuses a second")
     void oneWalletPerType() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
 
         assertThat(real.walletId()).isNotEqualTo(bonus.walletId());
         assertThatThrownBy(() -> jdbc.update(
@@ -141,11 +143,11 @@ class WalletServiceIT {
     @DisplayName("eight concurrent opens of one type all succeed with one wallet, for a new account and a known one")
     void concurrentOpensMakeOneWallet() throws Exception {
         // New to the ledger: the openers race to insert the account row as well as the wallet.
-        var real = concurrently(8, () -> wallets.open(account, WalletType.REAL));
+        List<WalletService.Opened> real = concurrently(8, () -> wallets.open(account, WalletType.REAL));
         // Known by now: they queue on the account row lock, and the conflict sends all but one home.
-        var bonus = concurrently(8, () -> wallets.open(account, WalletType.BONUS));
+        List<WalletService.Opened> bonus = concurrently(8, () -> wallets.open(account, WalletType.BONUS));
 
-        for (var results : List.of(real, bonus)) {
+        for (List<WalletService.Opened> results : List.of(real, bonus)) {
             assertThat(results).extracting(opened -> opened.wallet().walletId())
                     .containsOnly(results.getFirst().wallet().walletId());
             assertThat(results).filteredOn(WalletService.Opened::created).hasSize(1);
@@ -157,7 +159,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("concurrent opens of both types for a new account make one wallet of each")
     void concurrentOpensOfBothTypes() throws Exception {
-        var results = concurrently(8, () -> wallets.open(account, WalletType.REAL),
+        List<WalletService.Opened> results = concurrently(8, () -> wallets.open(account, WalletType.REAL),
                 () -> wallets.open(account, WalletType.BONUS));
 
         assertThat(results).filteredOn(WalletService.Opened::created)
@@ -170,7 +172,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("a closed wallet's type cannot be opened again: closing is terminal")
     void reopeningAClosedTypeIsRefused() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
         wallets.close(real.walletId());
 
         assertThatThrownBy(() -> wallets.open(account, WalletType.REAL))
@@ -183,14 +185,15 @@ class WalletServiceIT {
     @Test
     @DisplayName("opening, freezing and closing queue on the account row, and give up at statement_timeout")
     void walletWritesTakeTheAccountLockFirst() throws Exception {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
 
         try (Connection settle = dataSource.getConnection()) {
             // Another path mid-transaction on this account — a reserve, a settle, a grant — holding
             // ADR-004's anchor. Every wallet write waits behind it, then gives up after the 1s
             // statement_timeout instead of parking a thread: ACCOUNT_BUSY at the API.
             settle.setAutoCommit(false);
-            try (var lock = settle.prepareStatement("SELECT 1 FROM account_balances WHERE account_id = ? FOR UPDATE")) {
+            try (PreparedStatement lock =
+                    settle.prepareStatement("SELECT 1 FROM account_balances WHERE account_id = ? FOR UPDATE")) {
                 lock.setObject(1, account);
                 lock.executeQuery();
             }
@@ -210,9 +213,9 @@ class WalletServiceIT {
     @Test
     @DisplayName("freeze and unfreeze move the status and updated_at; repeating a status changes nothing")
     void freezeAndUnfreeze() {
-        var opened = wallets.open(account, WalletType.REAL).wallet();
+        Wallet opened = wallets.open(account, WalletType.REAL).wallet();
 
-        var frozen = wallets.changeStatus(opened.walletId(), WalletStatus.FROZEN);
+        Wallet frozen = wallets.changeStatus(opened.walletId(), WalletStatus.FROZEN);
         assertThat(frozen.status()).isEqualTo(WalletStatus.FROZEN);
         assertThat(frozen.updatedAt()).isAfter(opened.updatedAt());
         assertThat(frozen.createdAt()).isEqualTo(opened.createdAt());
@@ -220,7 +223,7 @@ class WalletServiceIT {
         assertThat(wallets.changeStatus(opened.walletId(), WalletStatus.FROZEN)).isEqualTo(frozen);
         assertThat(wallets.get(opened.walletId())).isEqualTo(frozen);
 
-        var active = wallets.changeStatus(opened.walletId(), WalletStatus.ACTIVE);
+        Wallet active = wallets.changeStatus(opened.walletId(), WalletStatus.ACTIVE);
         assertThat(active.status()).isEqualTo(WalletStatus.ACTIVE);
         assertThat(active.updatedAt()).isAfter(frozen.updatedAt());
         assertThat(active.closedAt()).isNull();
@@ -229,7 +232,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("a closed wallet can be neither frozen nor unfrozen, and CLOSED is not a status to set")
     void closedIsTerminal() {
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
 
         assertThatThrownBy(() -> wallets.changeStatus(bonus.walletId(), WalletStatus.CLOSED))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -263,7 +266,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("a wallet with posted money, a hold or a debt cannot be closed")
     void onlyAnEmptyWalletCloses() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
 
         fundCash(account, "100.0000");
         assertThatThrownBy(() -> wallets.close(real.walletId()))
@@ -276,7 +279,7 @@ class WalletServiceIT {
                 .isInstanceOf(WalletNotEmptyException.class)
                 .hasMessageContaining("held 60.0000");
 
-        var owing = wallets.open(UUID.randomUUID(), WalletType.REAL).wallet();
+        Wallet owing = wallets.open(UUID.randomUUID(), WalletType.REAL).wallet();
         debt(owing.accountId(), "25.0000");
         assertThatThrownBy(() -> wallets.close(owing.walletId()))
                 .isInstanceOf(WalletNotEmptyException.class)
@@ -289,11 +292,11 @@ class WalletServiceIT {
     @Test
     @DisplayName("an empty wallet closes, frozen or not, once: closing it again changes nothing")
     void emptyWalletClosesOnce() {
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
         wallets.changeStatus(bonus.walletId(), WalletStatus.FROZEN);
 
         wallets.close(bonus.walletId());
-        var closed = wallets.get(bonus.walletId());
+        Wallet closed = wallets.get(bonus.walletId());
         assertThat(closed.status()).isEqualTo(WalletStatus.CLOSED);
         assertThat(closed.closedAt()).isNotNull();
         assertThat(closed.updatedAt()).isEqualTo(closed.closedAt());
@@ -305,14 +308,14 @@ class WalletServiceIT {
     @Test
     @DisplayName("a wallet whose money has all been spent is empty, and closes with its buckets kept")
     void aSpentWalletCloses() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
         fundCash(account, "100.0000");
-        var stake = ledger.reserve(account, new BigDecimal("100.0000"), "all-in", null);
+        LedgerService.Reservation stake = ledger.reserve(account, new BigDecimal("100.0000"), "all-in", null);
         ledger.settle(stake.reservationId(), UUID.randomUUID());
 
         wallets.close(real.walletId());
 
-        var balance = wallets.balance(real.walletId());
+        WalletBalance balance = wallets.balance(real.walletId());
         assertThat(balance.status()).isEqualTo(WalletStatus.CLOSED);
         // The journal points at the CASH bucket, so the bucket outlives the wallet's useful life.
         assertThat(balance.buckets()).singleElement()
@@ -324,12 +327,12 @@ class WalletServiceIT {
     @Test
     @DisplayName("a wallet's balance sums its buckets: debt apart, holds held, CASH first, four decimal places")
     void walletBalance() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
         fundCash(account, "100.0000");
         debt(account, "25.0000");
         ledger.reserve(account, new BigDecimal("30.0000"), "hold-30", null);
 
-        var balance = wallets.balance(real.walletId());
+        WalletBalance balance = wallets.balance(real.walletId());
 
         assertThat(balance.walletId()).isEqualTo(real.walletId());
         assertThat(balance.accountId()).isEqualTo(account);
@@ -353,12 +356,12 @@ class WalletServiceIT {
     @Test
     @DisplayName("a frozen wallet keeps its money, but none of it is available or withdrawable")
     void frozenWalletBalance() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
         fundCash(account, "100.0000");
         ledger.reserve(account, new BigDecimal("30.0000"), "hold-30", null);
 
         wallets.changeStatus(real.walletId(), WalletStatus.FROZEN);
-        var balance = wallets.balance(real.walletId());
+        WalletBalance balance = wallets.balance(real.walletId());
 
         assertThat(balance.posted()).hasToString("100.0000");
         assertThat(balance.held()).hasToString("30.0000");
@@ -374,12 +377,12 @@ class WalletServiceIT {
     @Test
     @DisplayName("promotional money spends but does not withdraw; buckets come in spend order")
     void bonusWalletBalance() {
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
-        var later = grant(account, "40.0000", 20, false, null);
-        var sooner = grant(account, "60.0000", 10, false, null);
-        var lapsed = grant(account, "5.0000", 30, true, OffsetDateTime.now().minusHours(1));
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
+        UUID later = grant(account, "40.0000", 20, false, null);
+        UUID sooner = grant(account, "60.0000", 10, false, null);
+        UUID lapsed = grant(account, "5.0000", 30, true, OffsetDateTime.now().minusHours(1));
 
-        var balance = wallets.balance(bonus.walletId());
+        WalletBalance balance = wallets.balance(bonus.walletId());
 
         // The lapsed grant stays posted until the sweeper forfeits it, but the reserve path will not
         // spend it, so it is neither available nor, although it is marked withdrawable, withdrawable.
@@ -396,10 +399,10 @@ class WalletServiceIT {
     @DisplayName("a lapsed grant the sweeper has not reached is posted but not available, and a hold agrees")
     void aLapsedGrantIsNotAvailable() {
         wallets.open(account, WalletType.REAL);
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
         grant(account, "50.0000", 10, false, OffsetDateTime.now().minusHours(1));
 
-        var totals = ledger.balance(account);
+        LedgerService.Balance totals = ledger.balance(account);
         assertThat(totals.posted()).hasToString("50.0000");
         assertThat(totals.available()).hasToString("0.0000");
         assertThat(wallets.balance(bonus.walletId()).available()).hasToString("0.0000");
@@ -413,8 +416,8 @@ class WalletServiceIT {
     @Test
     @DisplayName("the account's available and withdrawable count ACTIVE wallets only: the sum of its wallets")
     void accountBalanceCountsActiveWalletsOnly() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
         fundCash(account, "100.0000");
         grant(account, "60.0000", 10, false, null);
 
@@ -423,7 +426,7 @@ class WalletServiceIT {
                 new BigDecimal("100.0000"), new BigDecimal("0.0000")));
 
         wallets.changeStatus(real.walletId(), WalletStatus.FROZEN);
-        var frozenReal = ledger.balance(account);
+        LedgerService.Balance frozenReal = ledger.balance(account);
         assertThat(frozenReal.posted()).hasToString("160.0000");
         assertThat(frozenReal.available()).hasToString("60.0000");
         assertThat(frozenReal.withdrawable()).hasToString("0.0000");
@@ -442,8 +445,8 @@ class WalletServiceIT {
     @Test
     @DisplayName("balancesOf lists every wallet of the account, REAL first, closed ones included")
     void balancesOfListsRealFirst() {
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
         wallets.close(bonus.walletId());
         wallets.open(UUID.randomUUID(), WalletType.REAL);
 
@@ -459,7 +462,7 @@ class WalletServiceIT {
     @Test
     @DisplayName("a frozen REAL wallet with 100 posted cannot fund a hold of 10: 409 INSUFFICIENT_FUNDS")
     void aFrozenWalletCannotBeSpent() {
-        var real = wallets.open(account, WalletType.REAL).wallet();
+        Wallet real = wallets.open(account, WalletType.REAL).wallet();
         fundCash(account, "100.0000");
         wallets.changeStatus(real.walletId(), WalletStatus.FROZEN);
 
@@ -488,12 +491,12 @@ class WalletServiceIT {
     @DisplayName("a hold allocates around a frozen BONUS wallet and draws on cash instead")
     void allocationSkipsFrozenWallets() {
         wallets.open(account, WalletType.REAL);
-        var bonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet bonus = wallets.open(account, WalletType.BONUS).wallet();
         fundCash(account, "100.0000");
         grant(account, "60.0000", 10, false, null);
         wallets.changeStatus(bonus.walletId(), WalletStatus.FROZEN);
 
-        var hold = ledger.reserve(account, new BigDecimal("50.0000"), "around-the-bonus", null);
+        LedgerService.Reservation hold = ledger.reserve(account, new BigDecimal("50.0000"), "around-the-bonus", null);
 
         assertThat(hold.allocations()).singleElement().satisfies(a -> {
             assertThat(a.bucketType()).isEqualTo("CASH");
@@ -506,11 +509,11 @@ class WalletServiceIT {
     @Test
     @DisplayName("search filters by account, type and status, combined with AND, oldest first")
     void searchFilters() {
-        var aReal = wallets.open(account, WalletType.REAL).wallet();
-        var aBonus = wallets.open(account, WalletType.BONUS).wallet();
+        Wallet aReal = wallets.open(account, WalletType.REAL).wallet();
+        Wallet aBonus = wallets.open(account, WalletType.BONUS).wallet();
         UUID other = UUID.randomUUID();
-        var bReal = wallets.open(other, WalletType.REAL).wallet();
-        var bBonus = wallets.open(other, WalletType.BONUS).wallet();
+        Wallet bReal = wallets.open(other, WalletType.REAL).wallet();
+        Wallet bBonus = wallets.open(other, WalletType.BONUS).wallet();
         wallets.changeStatus(aBonus.walletId(), WalletStatus.FROZEN);
         wallets.close(bBonus.walletId());
 
@@ -527,14 +530,14 @@ class WalletServiceIT {
     @Test
     @DisplayName("search pages through every match oldest first, with no gaps, no repeats and a null last cursor")
     void searchPages() {
-        var real = new ArrayList<Wallet>();
+        List<Wallet> real = new ArrayList<>();
         for (int i = 0; i < 7; i++) {
             UUID owner = UUID.randomUUID();
             real.add(wallets.open(owner, WalletType.REAL).wallet());
             wallets.open(owner, WalletType.BONUS);
         }
 
-        var pages = pages(new WalletSearch(null, WalletType.REAL, null, 3, null));
+        List<WalletPage> pages = pages(new WalletSearch(null, WalletType.REAL, null, 3, null));
 
         assertThat(pages).extracting(page -> page.data().size()).containsExactly(3, 3, 1);
         assertThat(pages.getLast().nextCursor()).isNull();
@@ -552,14 +555,14 @@ class WalletServiceIT {
         // One transaction's wallets share now(), as the V2 backfill's do. The last one is a single
         // microsecond younger: a cursor that kept milliseconds would skip or repeat it.
         String sameInstant = "2026-10-13T10:00:00.123456Z";
-        var tied = new ArrayList<UUID>();
+        List<UUID> tied = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
             tied.add(walletCreatedAt(sameInstant));
         }
         UUID younger = walletCreatedAt("2026-10-13T10:00:00.123457Z");
         tied.sort(POSTGRES_UUID_ORDER);
 
-        var pages = pages(new WalletSearch(null, null, null, 1, null));
+        List<WalletPage> pages = pages(new WalletSearch(null, null, null, 1, null));
 
         assertThat(pages.stream().flatMap(page -> ids(page).stream()).toList())
                 .containsExactly(tied.get(0), tied.get(1), tied.get(2), younger);
@@ -569,7 +572,7 @@ class WalletServiceIT {
     @DisplayName("a cursor this service did not issue, or a limit out of range, is VALIDATION_FAILED")
     void searchRefusesWhatItCannotRun() {
         UUID id = UUID.randomUUID();
-        var refused = new ArrayList<String>(List.of(
+        List<String> refused = new ArrayList<>(List.of(
                 "not base64url!",
                 "",
                 base64url("v2:1791885600123456:" + id),
@@ -605,7 +608,7 @@ class WalletServiceIT {
 
     /** Follows next cursors to the end; fails rather than loop if a cursor never runs out. */
     private List<WalletPage> pages(WalletSearch first) {
-        var pages = new ArrayList<WalletPage>();
+        List<WalletPage> pages = new ArrayList<>();
         WalletSearch search = first;
         while (pages.size() < 50) {
             WalletPage page = wallets.search(search);
@@ -653,8 +656,8 @@ class WalletServiceIT {
     /** Runs the calls on {@code threads} threads, released together, and returns every result. */
     @SafeVarargs
     private static <T> List<T> concurrently(int threads, Callable<T>... calls) throws Exception {
-        var start = new CountDownLatch(1);
-        var pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {
             List<Future<T>> futures = IntStream.range(0, threads)
                     .mapToObj(i -> pool.submit(() -> {
@@ -663,7 +666,7 @@ class WalletServiceIT {
                     }))
                     .toList();
             start.countDown();
-            var results = new ArrayList<T>();
+            List<T> results = new ArrayList<>();
             for (Future<T> future : futures) {
                 results.add(future.get(30, SECONDS));
             }
@@ -675,7 +678,7 @@ class WalletServiceIT {
 
     /** Books money into the account's CASH bucket, keeping the account aggregate in step. */
     private void fundCash(UUID accountId, String amount) {
-        var money = new BigDecimal(amount);
+        BigDecimal money = new BigDecimal(amount);
         jdbc.update("UPDATE balance_buckets SET posted_balance = posted_balance + ? "
                 + "WHERE account_id = ? AND bucket_type = 'CASH'", money, accountId);
         jdbc.update("UPDATE account_balances SET posted_balance = posted_balance + ? WHERE account_id = ?",
@@ -686,7 +689,7 @@ class WalletServiceIT {
     private UUID grant(UUID accountId, String amount, int spendPriority, boolean withdrawable,
                        @Nullable OffsetDateTime expiresAt) {
         UUID bucket = UUID.randomUUID();
-        var money = new BigDecimal(amount);
+        BigDecimal money = new BigDecimal(amount);
         jdbc.update("""
                 INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, source_module,
                                              grant_id, posted_balance, withdrawable, wagering_remaining,
@@ -701,7 +704,7 @@ class WalletServiceIT {
 
     /** What the user owes (ADR-009): a DEBT bucket in the REAL wallet, and the account's debt_total. */
     private void debt(UUID accountId, String amount) {
-        var money = new BigDecimal(amount);
+        BigDecimal money = new BigDecimal(amount);
         jdbc.update("""
                 INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)

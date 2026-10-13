@@ -144,7 +144,7 @@ class WalletsMigrationIT {
 
     /** wallet_type → wallet_id. */
     private Map<String, UUID> walletsOf(UUID accountId) {
-        var wallets = new HashMap<String, UUID>();
+        Map<String, UUID> wallets = new HashMap<>();
         jdbc.query("SELECT wallet_type, wallet_id FROM " + SCHEMA + ".wallets WHERE account_id = ?",
                 rs -> {
                     wallets.put(rs.getString("wallet_type"), rs.getObject("wallet_id", UUID.class));

@@ -22,7 +22,7 @@ class WalletCursorTest {
     @Test
     @DisplayName("round-trips a position to the microsecond, as URL-safe text")
     void roundTrips() {
-        var cursor = new WalletCursor(Instant.parse("2026-10-13T10:00:00.123456Z"), WALLET);
+        WalletCursor cursor = new WalletCursor(Instant.parse("2026-10-13T10:00:00.123456Z"), WALLET);
 
         String encoded = cursor.encode();
 
@@ -35,7 +35,7 @@ class WalletCursorTest {
     @Test
     @DisplayName("resumes after the last wallet of the page")
     void resumesAfterTheLastWallet() {
-        var last = new Wallet(WALLET, UUID.randomUUID(), WalletType.REAL, WalletStatus.ACTIVE,
+        Wallet last = new Wallet(WALLET, UUID.randomUUID(), WalletType.REAL, WalletStatus.ACTIVE,
                 Instant.parse("2026-10-13T10:00:00.000001Z"), Instant.parse("2026-10-13T11:00:00Z"), null);
 
         assertThat(WalletCursor.after(last)).isEqualTo(new WalletCursor(last.createdAt(), WALLET));

@@ -58,7 +58,7 @@ class AccountBalanceController {
     @ApiResponse(responseCode = "200", description = "The account's totals and each wallet's")
     @ApiResponse(responseCode = "404", description = "RESOURCE_NOT_FOUND")
     BalanceResponse balance(@PathVariable UUID accountId) {
-        var totals = ledger.balance(accountId);
+        LedgerService.Balance totals = ledger.balance(accountId);
         return BalanceResponse.from(totals, wallets.currency(), wallets.balancesOf(accountId));
     }
 }

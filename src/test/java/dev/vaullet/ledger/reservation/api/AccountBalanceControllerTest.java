@@ -26,6 +26,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.json.AbstractJsonContentAssert;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 
 /**
@@ -86,7 +87,7 @@ class AccountBalanceControllerTest {
         when(wallets.currency()).thenReturn("EUR");
         when(wallets.balancesOf(ACCOUNT_ID)).thenReturn(List.of(realWallet(), frozenBonusWallet()));
 
-        var json = assertThat(mvc.get()
+        AbstractJsonContentAssert<?> json = assertThat(mvc.get()
                         .uri("/v1/accounts/{id}/balance", ACCOUNT_ID)
                         .with(jwt().authorities(() -> READ)))
                 .hasStatusOk()
@@ -118,7 +119,7 @@ class AccountBalanceControllerTest {
     @Test
     @DisplayName("an account with no wallets has an empty wallets array, not a missing one")
     void anAccountWithoutWallets() {
-        var zero = new BigDecimal("0.0000");
+        BigDecimal zero = new BigDecimal("0.0000");
         when(ledger.balance(ACCOUNT_ID)).thenReturn(new LedgerService.Balance(zero, zero, zero, zero, zero));
         when(wallets.currency()).thenReturn("EUR");
         when(wallets.balancesOf(ACCOUNT_ID)).thenReturn(List.of());
@@ -176,7 +177,7 @@ class AccountBalanceControllerTest {
     }
 
     private static WalletBalance frozenBonusWallet() {
-        var zero = new BigDecimal("0.0000");
+        BigDecimal zero = new BigDecimal("0.0000");
         return new WalletBalance(
                 BONUS_WALLET_ID,
                 ACCOUNT_ID,

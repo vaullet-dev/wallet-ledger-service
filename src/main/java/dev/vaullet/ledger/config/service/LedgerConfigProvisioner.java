@@ -2,6 +2,7 @@ package dev.vaullet.ledger.config.service;
 
 import dev.vaullet.ledger.config.dao.LedgerConfigRepository;
 import java.util.Currency;
+import java.util.Optional;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,7 +47,7 @@ class LedgerConfigProvisioner implements InitializingBean {
 
     void provision() {
         @Nullable Currency configured = configuredCurrency();
-        var stored = config.find();
+        Optional<LedgerConfigRepository.LedgerConfigRow> stored = config.find();
         if (stored.isEmpty()) {
             if (configured == null) {
                 throw new IllegalStateException("ledger_config is empty and ledger.currency is not set. Set "
@@ -61,7 +62,8 @@ class LedgerConfigProvisioner implements InitializingBean {
             // Read back rather than assumed: a replica starting at the same moment may have won.
             stored = config.find();
         }
-        var row = stored.orElseThrow(() -> new IllegalStateException("ledger_config is still empty after provisioning"));
+        LedgerConfigRepository.LedgerConfigRow row = stored.orElseThrow(
+                () -> new IllegalStateException("ledger_config is still empty after provisioning"));
 
         if (configured != null && !configured.getCurrencyCode().equals(row.currency())) {
             throw new IllegalStateException(("ledger.currency is %s, but this ledger was provisioned in %s. A "

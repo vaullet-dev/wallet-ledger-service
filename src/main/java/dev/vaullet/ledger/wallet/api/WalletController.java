@@ -6,6 +6,7 @@ import dev.vaullet.ledger.wallet.api.dto.UpdateWalletStatusRequest;
 import dev.vaullet.ledger.wallet.api.dto.WalletBalanceResponse;
 import dev.vaullet.ledger.wallet.api.dto.WalletResponse;
 import dev.vaullet.ledger.wallet.api.dto.WalletSearchParameters;
+import dev.vaullet.ledger.wallet.service.WalletPage;
 import dev.vaullet.ledger.wallet.service.WalletService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -79,7 +80,7 @@ class WalletController {
             responseCode = "409",
             description = "WALLET_CLOSED — the account's wallet of that type is closed, and closing is terminal")
     ResponseEntity<WalletResponse> open(@Valid @RequestBody OpenWalletRequest request, UriComponentsBuilder uriBuilder) {
-        var opened = wallets.open(request.accountId(), request.walletType());
+        WalletService.Opened opened = wallets.open(request.accountId(), request.walletType());
 
         URI location = uriBuilder
                 .path("/v1/wallets/{id}")
@@ -104,7 +105,7 @@ class WalletController {
             description = "VALIDATION_FAILED — a filter value that does not exist, a limit outside 1 to 100, "
                     + "or a cursor this service did not issue")
     ListResponse<WalletResponse> search(@Valid @ParameterObject WalletSearchParameters query) {
-        var page = wallets.search(query.toSearch());
+        WalletPage page = wallets.search(query.toSearch());
         return ListResponse.of(page.data(), page.nextCursor(), WalletResponse::from);
     }
 

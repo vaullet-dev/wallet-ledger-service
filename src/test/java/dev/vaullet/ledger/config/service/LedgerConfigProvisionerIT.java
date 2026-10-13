@@ -50,7 +50,7 @@ class LedgerConfigProvisionerIT {
     @DisplayName("a later start with the same currency changes nothing")
     void laterStartsOnlyCheck() {
         start("EUR", null);
-        var first = row();
+        Map<String, Object> first = row();
 
         start("EUR", 2);
         start(null, null);
@@ -62,7 +62,7 @@ class LedgerConfigProvisionerIT {
     @DisplayName("a start configured for another currency is refused, and the row is left as it was")
     void refusesAnotherCurrency() {
         start("EUR", null);
-        var provisioned = row();
+        Map<String, Object> provisioned = row();
 
         assertThatThrownBy(() -> start("USD", null))
                 .isInstanceOf(IllegalStateException.class)

@@ -115,8 +115,8 @@ public class WalletRepository {
      */
     public List<WalletRow> search(@Nullable UUID accountId, @Nullable String type, @Nullable String status,
                                   @Nullable Instant afterCreatedAt, @Nullable UUID afterWalletId, int limit) {
-        var sql = new StringBuilder(SELECT_WALLET).append(" WHERE TRUE");
-        var args = new ArrayList<Object>();
+        StringBuilder sql = new StringBuilder(SELECT_WALLET).append(" WHERE TRUE");
+        List<Object> args = new ArrayList<>();
         if (accountId != null) {
             sql.append(" AND account_id = ?");
             args.add(accountId);

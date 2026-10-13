@@ -119,7 +119,7 @@ class LedgerConfigProvisionerTest {
     @DisplayName("it runs while the context starts, so a mismatch stops the application starting")
     void runsAtStartup() {
         when(config.find()).thenReturn(Optional.of(new LedgerConfigRow("EUR", 2)));
-        var context = new ApplicationContextRunner()
+        ApplicationContextRunner context = new ApplicationContextRunner()
                 .withBean(LedgerConfigRepository.class, () -> config)
                 .withUserConfiguration(LedgerConfigProvisioner.class);
 
