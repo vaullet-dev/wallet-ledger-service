@@ -50,7 +50,7 @@ class OverdraftIT {
         // itself against the test fixture is the rule working exactly as intended.
         jdbc.update("""
                 TRUNCATE ledger_entries, reservation_allocations, reservations,
-                         balance_buckets, account_balances, ledger_config
+                         balance_buckets, wallets, account_balances, ledger_config
                 """);
         jdbc.update("INSERT INTO ledger_config (currency, minor_units) VALUES ('EUR', 2)");
         account = accountWithCash(new BigDecimal("100.0000"));
@@ -167,10 +167,10 @@ class OverdraftIT {
     void debtCannotBeSpent() {
         var indebted = accountWithCash(new BigDecimal("50.0000"));
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, posted_balance,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)
-                VALUES (?, ?, 'DEBT', 100.0000, FALSE, 0)
-                """, UUID.randomUUID(), indebted);
+                VALUES (?, ?, ?, 'DEBT', 100.0000, FALSE, 0)
+                """, UUID.randomUUID(), indebted, realWalletOf(indebted));
         jdbc.update("UPDATE account_balances SET debt_total = 100.0000 WHERE account_id = ?", indebted);
 
         // 50 cash + 100 debt is not 150 of spending power.
@@ -186,10 +186,10 @@ class OverdraftIT {
     @DisplayName("promotional money spends before cash, and only cash is withdrawable")
     void spendPriorityAndWithdrawability() {
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, source_module, grant_id,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, source_module, grant_id,
                                              posted_balance, withdrawable, wagering_remaining, spend_priority)
-                VALUES (?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
-                """, UUID.randomUUID(), account, UUID.randomUUID());
+                VALUES (?, ?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
+                """, UUID.randomUUID(), account, wallet(account, "BONUS"), UUID.randomUUID());
         jdbc.update("UPDATE account_balances SET posted_balance = posted_balance + 60.0000 WHERE account_id = ?",
                 account);
 
@@ -280,10 +280,10 @@ class OverdraftIT {
     @DisplayName("settlement journals one debit per bucket the hold drew from")
     void settleJournalsOneDebitPerAllocation() {
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, source_module, grant_id,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, source_module, grant_id,
                                              posted_balance, withdrawable, wagering_remaining, spend_priority)
-                VALUES (?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
-                """, UUID.randomUUID(), account, UUID.randomUUID());
+                VALUES (?, ?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
+                """, UUID.randomUUID(), account, wallet(account, "BONUS"), UUID.randomUUID());
         jdbc.update("UPDATE account_balances SET posted_balance = posted_balance + 60.0000 WHERE account_id = ?",
                 account);
 
@@ -318,10 +318,22 @@ class OverdraftIT {
         UUID id = UUID.randomUUID();
         jdbc.update("INSERT INTO account_balances (account_id, posted_balance) VALUES (?, ?)", id, cash);
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, posted_balance,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)
-                VALUES (?, ?, 'CASH', ?, TRUE, 100)
-                """, UUID.randomUUID(), id, cash);
+                VALUES (?, ?, ?, 'CASH', ?, TRUE, 100)
+                """, UUID.randomUUID(), id, wallet(id, "REAL"), cash);
         return id;
+    }
+
+    /** Every bucket lives in a wallet (V2): CASH and DEBT in the REAL one, grants in BONUS. */
+    private UUID wallet(UUID accountId, String type) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO wallets (wallet_id, account_id, wallet_type) VALUES (?, ?, ?)", id, accountId, type);
+        return id;
+    }
+
+    private UUID realWalletOf(UUID accountId) {
+        return jdbc.queryForObject(
+                "SELECT wallet_id FROM wallets WHERE account_id = ? AND wallet_type = 'REAL'", UUID.class, accountId);
     }
 }

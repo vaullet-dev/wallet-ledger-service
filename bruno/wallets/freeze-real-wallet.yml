@@ -1,0 +1,32 @@
+info:
+  name: Freeze REAL wallet
+  type: http
+  seq: 7
+
+http:
+  method: PATCH
+  url: "{{base_url}}/v1/wallets/{{real_wallet_id}}"
+  body:
+    type: json
+    data: |-
+      {
+        "status": "FROZEN"
+      }
+  auth: inherit
+
+runtime:
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "200"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  Its money stays where it is and cannot be spent: reservations allocate around it, and its
+  `available` reads zero until it is unfrozen. Freezing a frozen wallet changes nothing.

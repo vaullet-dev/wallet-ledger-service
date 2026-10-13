@@ -1,0 +1,37 @@
+info:
+  name: Open BONUS wallet
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{base_url}}/v1/wallets"
+  body:
+    type: json
+    data: |-
+      {
+        "account_id": "{{account_id}}",
+        "type": "BONUS"
+      }
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        if (res.status === 201) {
+          bru.setVar("bonus_wallet_id", res.body.wallet_id);
+        }
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "201"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: The account's BONUS wallet. It starts with no buckets; each promotional grant adds one. Keeps `bonus_wallet_id`.

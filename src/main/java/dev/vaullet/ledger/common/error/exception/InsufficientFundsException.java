@@ -1,6 +1,7 @@
-package dev.vaullet.ledger.common.error;
+package dev.vaullet.ledger.common.error.exception;
 
 import dev.vaullet.common.error.ApplicationException;
+import dev.vaullet.ledger.common.error.LedgerErrorType;
 import java.io.Serial;
 import java.math.BigDecimal;
 

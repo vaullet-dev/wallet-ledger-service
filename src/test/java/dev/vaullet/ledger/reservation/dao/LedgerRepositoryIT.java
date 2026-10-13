@@ -49,17 +49,19 @@ class LedgerRepositoryIT {
     void fixture() {
         jdbc.update("""
                 TRUNCATE ledger_entries, reservation_allocations, reservations,
-                         balance_buckets, account_balances, ledger_config
+                         balance_buckets, wallets, account_balances, ledger_config
                 """);
         jdbc.update("INSERT INTO ledger_config (currency, minor_units) VALUES ('EUR', 2)");
         account = UUID.randomUUID();
         bucket = UUID.randomUUID();
+        UUID wallet = UUID.randomUUID();
         jdbc.update("INSERT INTO account_balances (account_id, posted_balance) VALUES (?, 100.0000)", account);
+        jdbc.update("INSERT INTO wallets (wallet_id, account_id, wallet_type) VALUES (?, ?, 'REAL')", wallet, account);
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, posted_balance,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)
-                VALUES (?, ?, 'CASH', 100.0000, TRUE, 100)
-                """, bucket, account);
+                VALUES (?, ?, ?, 'CASH', 100.0000, TRUE, 100)
+                """, bucket, account, wallet);
     }
 
     @Test

@@ -15,7 +15,7 @@ spring:
 
 logging:
   level:
-    io.vaullet.ledger: DEBUG
+    dev.vaullet.ledger: DEBUG
     # The statements are the design (ADR-004), so seeing them is the point rather than a
     # debugging last resort. Never enable in production: it logs parameter values, and
     # here the parameters are account ids and amounts.
@@ -34,6 +34,10 @@ management:
 
 app:
   environment: local
+
+ledger:
+  # What a fresh local database is provisioned with; see application.yaml.
+  currency: EUR
 
 vaullet:
   api:

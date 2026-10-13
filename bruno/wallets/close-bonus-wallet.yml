@@ -1,0 +1,26 @@
+info:
+  name: Close BONUS wallet
+  type: http
+  seq: 9
+
+http:
+  method: DELETE
+  url: "{{base_url}}/v1/wallets/{{bonus_wallet_id}}"
+  auth: inherit
+
+runtime:
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "204"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  Only an empty wallet closes: nothing posted, nothing held, no debt (`409 WALLET_NOT_EMPTY` otherwise).
+  Closing is terminal, and closing a closed wallet answers `204` again.

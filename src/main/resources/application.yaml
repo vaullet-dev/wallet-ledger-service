@@ -109,14 +109,27 @@ logging:
 #
 # The prefix is `vaullet` rather than `app` so that a reader can tell at a glance
 # which keys come from the shared library and which are this codebase's own. The
-# `app` block below is the ledger's whole share, and it is one label — ADR-004 puts
-# hold policy in ledger_config.max_hold_seconds, in the database, read inside the
-# same transaction that enforces it. Mirroring it here would give the ledger two
-# sources of truth for one rule.
+# `app` and `ledger` blocks below are the ledger's whole share: one label and the
+# currency. ADR-004 puts hold policy in ledger_config.max_hold_seconds, in the
+# database, read inside the same transaction that enforces it. Mirroring it here
+# would give the ledger two sources of truth for one rule.
 # ---------------------------------------------------------------------------
 app:
   # Free-form environment label, interpolated into the OpenAPI description below.
   environment: ${APP_ENVIRONMENT:unknown}
+
+# ADR-004: one currency per deployment, supplied by the operator. This is not a
+# second source of truth next to ledger_config: the first start writes the row
+# from it, and every later start only checks it against that row and refuses to
+# start on a mismatch, because moving a live deployment to another currency is a
+# migration, not a configuration change. No default: a currency nobody chose is
+# what ADR-004 rules out.
+ledger:
+  # ISO 4217, e.g. EUR. Required on the first start.
+  currency: ${LEDGER_CURRENCY:}
+  # Decimal places of the minor unit. Empty means ISO 4217's: 2 for EUR, 0 for
+  # JPY, 3 for KWD.
+  minor-units: ${LEDGER_MINOR_UNITS:}
 
 vaullet:
   api:
@@ -126,7 +139,8 @@ vaullet:
     # ADR-011 §2 puts the major version in the path; the library default already
     # matches, and it is restated because CORS scope is worth being explicit about.
     cors-path-pattern: /v1/**
-    allowed-methods: GET,POST,DELETE
+    # PATCH since wallets (#10): PATCH /v1/wallets/{id} freezes and unfreezes.
+    allowed-methods: GET,POST,PATCH,DELETE
 
   security:
     # What the @PreAuthorize rules in this service ask for. Under the `local` profile

@@ -1,0 +1,27 @@
+info:
+  name: Get wallet balance
+  type: http
+  seq: 5
+
+http:
+  method: GET
+  url: "{{base_url}}/v1/wallets/{{real_wallet_id}}/balance"
+  auth: inherit
+
+runtime:
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "200"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  The REAL wallet's totals, its `currency`, and its buckets: here the one CASH bucket, at zero. Money is a
+  decimal string. `available` and `withdrawable` are zero unless the wallet is `ACTIVE`. Advisory, like
+  every balance read: stale the moment it is returned.

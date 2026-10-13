@@ -108,17 +108,21 @@ public class LedgerRepository {
      * <p>DEBT is excluded in the WHERE clause, not in the caller's loop: it holds a POSITIVE amount
      * representing what the user owes (ADR-009), so a naive "any bucket with a balance" query would
      * let someone spend their own debt. Expired buckets are excluded for the same reason — the
-     * sweeper may not have zeroed them yet.
+     * sweeper may not have zeroed them yet. So are the buckets of a wallet that is not ACTIVE: a
+     * frozen wallet keeps its money where it is, and this query is the only way money gets spent,
+     * so it is the one place the freeze has to hold.
      */
     public List<BucketRow> allocatableBuckets(UUID accountId) {
         return jdbc.query("""
-                SELECT bucket_id, bucket_type, posted_balance - held_total AS available
-                  FROM balance_buckets
-                 WHERE account_id = ?
-                   AND bucket_type <> 'DEBT'
-                   AND (expires_at IS NULL OR expires_at > now())
-                   AND posted_balance - held_total > 0
-                 ORDER BY spend_priority, expires_at NULLS LAST
+                SELECT b.bucket_id, b.bucket_type, b.posted_balance - b.held_total AS available
+                  FROM balance_buckets b
+                  JOIN wallets w ON w.wallet_id = b.wallet_id
+                 WHERE b.account_id = ?
+                   AND w.status = 'ACTIVE'
+                   AND b.bucket_type <> 'DEBT'
+                   AND (b.expires_at IS NULL OR b.expires_at > now())
+                   AND b.posted_balance - b.held_total > 0
+                 ORDER BY b.spend_priority, b.expires_at NULLS LAST
                 """,
                 (rs, i) -> new BucketRow(rs.getObject("bucket_id", UUID.class),
                         rs.getString("bucket_type"), rs.getBigDecimal("available")),
@@ -270,17 +274,42 @@ public class LedgerRepository {
     public record AccountBalanceRow(BigDecimal posted, BigDecimal held, BigDecimal debt) {}
 
     /**
+     * What the account could spend now: {@code posted - held} over the buckets
+     * {@link #allocatableBuckets} would draw on — fundable, not past their expiry, in an ACTIVE
+     * wallet.
+     *
+     * <p>Summed over buckets rather than taken from the aggregate, which still counts a frozen
+     * wallet's money and a lapsed grant the sweeper has not zeroed yet: both stay posted, and the
+     * reserve path spends neither. A figure called "available" that included them would promise a
+     * hold that {@code reserve} then refuses.
+     */
+    public BigDecimal available(UUID accountId) {
+        BigDecimal sum = jdbc.queryForObject("""
+                SELECT COALESCE(SUM(b.posted_balance - b.held_total), 0.0000)
+                  FROM balance_buckets b
+                  JOIN wallets w ON w.wallet_id = b.wallet_id
+                 WHERE b.account_id = ? AND w.status = 'ACTIVE'
+                   AND b.bucket_type <> 'DEBT'
+                   AND (b.expires_at IS NULL OR b.expires_at > now())
+                """, BigDecimal.class, accountId);
+        return sum == null ? BigDecimal.ZERO : sum;
+    }
+
+    /**
      * What the account could actually withdraw, as opposed to what it could spend.
      *
      * <p>Summed over buckets rather than taken from the aggregate: withdrawability is a per-bucket
      * property (promotional money spends but does not withdraw), so the aggregate cannot answer it.
+     * Only ACTIVE wallets count, as in {@link #available}.
      */
     public BigDecimal withdrawable(UUID accountId) {
         BigDecimal sum = jdbc.queryForObject("""
-                SELECT COALESCE(SUM(posted_balance - held_total), 0)
-                  FROM balance_buckets
-                 WHERE account_id = ? AND withdrawable
-                   AND (expires_at IS NULL OR expires_at > now())
+                SELECT COALESCE(SUM(b.posted_balance - b.held_total), 0.0000)
+                  FROM balance_buckets b
+                  JOIN wallets w ON w.wallet_id = b.wallet_id
+                 WHERE b.account_id = ? AND w.status = 'ACTIVE'
+                   AND b.withdrawable
+                   AND (b.expires_at IS NULL OR b.expires_at > now())
                 """, BigDecimal.class, accountId);
         return sum == null ? BigDecimal.ZERO : sum;
     }

@@ -1,0 +1,30 @@
+info:
+  name: Unfreeze REAL wallet
+  type: http
+  seq: 8
+
+http:
+  method: PATCH
+  url: "{{base_url}}/v1/wallets/{{real_wallet_id}}"
+  body:
+    type: json
+    data: |-
+      {
+        "status": "ACTIVE"
+      }
+  auth: inherit
+
+runtime:
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "200"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: "Lifts the freeze. `ACTIVE` and `FROZEN` are the only statuses this takes (`400` otherwise): closing is `DELETE`."

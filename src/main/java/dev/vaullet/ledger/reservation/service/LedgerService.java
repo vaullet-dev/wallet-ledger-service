@@ -103,12 +103,13 @@ public class LedgerService {
             remaining = remaining.subtract(take);
         }
 
-        // The aggregate said yes but the buckets cannot cover it. Reachable when a bucket has
-        // expired and the sweeper has not yet zeroed it, so posted_balance is briefly stale.
-        // Rejecting is correct: never hold money no bucket can fund.
+        // The aggregate said yes but the buckets cannot cover it. Reachable when part of the balance
+        // sits in a frozen wallet, which the aggregate still counts and the allocation skips, or in
+        // a bucket that has expired and that the sweeper has not yet zeroed. Rejecting is correct:
+        // never hold money no bucket can fund.
         if (remaining.signum() > 0) {
             throw new InsufficientFunds("allocatable balance short by " + remaining
-                    + " (expired buckets not yet swept)");
+                    + " (frozen wallets and expired buckets cannot fund a hold)");
         }
 
         UUID reservationId = UUID.randomUUID();
@@ -202,10 +203,14 @@ public class LedgerService {
         // reserve() maps it to AccountNotFound. Making the two agree is a behaviour change.
         var account = ledger.accountBalance(accountId)
                 .orElseThrow(() -> new EmptyResultDataAccessException(1));
+        // Posted, held and debt are the account's totals. What can be spent or withdrawn counts only
+        // the money the reserve path would draw on: not a frozen wallet's, not a lapsed grant's. So
+        // available is posted - held only while neither exists, and both figures are the sums of
+        // the account's wallet balances.
         return new Balance(
                 account.posted(),
                 account.held(),
-                account.posted().subtract(account.held()),
+                ledger.available(accountId),
                 ledger.withdrawable(accountId),
                 account.debt());
     }
