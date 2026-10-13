@@ -1,0 +1,40 @@
+info:
+  name: Open REAL wallet
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{base_url}}/v1/wallets"
+  body:
+    type: json
+    data: |-
+      {
+        "account_id": "{{account_id}}",
+        "type": "REAL"
+      }
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        if (res.status === 201) {
+          bru.setVar("real_wallet_id", res.body.wallet_id);
+        }
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "201"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  Opens the account's REAL wallet with its CASH bucket, and the account itself if this is its first
+  wallet. Repeating the request returns the same wallet, again with `201`; once that wallet is closed
+  it answers `409 WALLET_CLOSED`. Keeps `real_wallet_id` for the requests below.

@@ -1,0 +1,26 @@
+info:
+  name: Close REAL wallet
+  type: http
+  seq: 10
+
+http:
+  method: DELETE
+  url: "{{base_url}}/v1/wallets/{{real_wallet_id}}"
+  auth: inherit
+
+runtime:
+  assertions:
+    - expression: res.status
+      operator: eq
+      value: "204"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  The same for the REAL wallet. Its record stays, and the account cannot open another REAL wallet, so
+  the next run of this folder needs a fresh `account_id`.

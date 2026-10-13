@@ -27,7 +27,7 @@ public final class TestLedgerApplication {
     }
 
     private static String[] concat(String[] args, String extra) {
-        var all = new String[args.length + 1];
+        String[] all = new String[args.length + 1];
         System.arraycopy(args, 0, all, 0, args.length);
         all[args.length] = extra;
         return all;

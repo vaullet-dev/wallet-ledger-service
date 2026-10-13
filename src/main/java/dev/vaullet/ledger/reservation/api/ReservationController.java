@@ -88,7 +88,7 @@ class ReservationController {
             @Valid @RequestBody CreateReservationRequest request,
             UriComponentsBuilder uriBuilder) {
 
-        var reservation = ledger.reserve(
+        LedgerService.Reservation reservation = ledger.reserve(
                 request.accountId(),
                 request.amount(),
                 idempotencyKey,

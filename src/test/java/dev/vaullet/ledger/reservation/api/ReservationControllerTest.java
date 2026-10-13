@@ -25,6 +25,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResultAssert;
 
 /**
  * Web-layer slice: real routing, real validation, real security filters, real error handling — with
@@ -118,7 +119,7 @@ class ReservationControllerTest {
     void serialisesMoneyAsAStringInSnakeCase() {
         when(ledger.reserve(any(), any(), any(), any())).thenReturn(heldReservation());
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/reservations")
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -177,7 +178,7 @@ class ReservationControllerTest {
         when(ledger.reserve(any(), any(), any(), any()))
                 .thenThrow(new CannotAcquireLockException("could not obtain lock on row of \"account_balances\""));
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/reservations")
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -206,7 +207,7 @@ class ReservationControllerTest {
     @Test
     @DisplayName("a non-positive amount is rejected with field-level errors, before the ledger runs")
     void validatesTheAmount() {
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/reservations")
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -225,7 +226,7 @@ class ReservationControllerTest {
         when(ledger.reserve(any(), any(), any(), any()))
                 .thenThrow(new LedgerService.InsufficientFunds("available 40.0000 < requested 60.0000"));
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/reservations")
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -245,7 +246,7 @@ class ReservationControllerTest {
         when(ledger.reserve(any(), any(), any(), any()))
                 .thenThrow(new LedgerService.HoldTtlTooLong("34560000s exceeds max_hold_seconds 2592000"));
 
-        var result = assertThat(mvc.post()
+        MvcTestResultAssert result = assertThat(mvc.post()
                         .uri("/v1/reservations")
                         .header("Idempotency-Key", "forever")
                         .contentType(MediaType.APPLICATION_JSON)

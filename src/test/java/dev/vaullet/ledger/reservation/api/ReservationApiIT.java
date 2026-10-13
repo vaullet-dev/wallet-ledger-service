@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResultAssert;
 
 /**
  * End-to-end through every layer: HTTP in, PostgreSQL out.
@@ -48,30 +49,34 @@ class ReservationApiIT {
         jdbc.update(
                 """
                 TRUNCATE ledger_entries, reservation_allocations, reservations,
-                         balance_buckets, account_balances, ledger_config
+                         balance_buckets, wallets, account_balances, ledger_config
                 """);
         jdbc.update("INSERT INTO ledger_config (currency, minor_units) VALUES ('EUR', 2)");
 
         account = UUID.randomUUID();
+        UUID wallet = UUID.randomUUID();
         jdbc.update(
                 "INSERT INTO account_balances (account_id, posted_balance) VALUES (?, ?)",
                 account,
                 new BigDecimal("100.0000"));
         jdbc.update(
+                "INSERT INTO wallets (wallet_id, account_id, wallet_type) VALUES (?, ?, 'REAL')", wallet, account);
+        jdbc.update(
                 """
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, posted_balance,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)
-                VALUES (?, ?, 'CASH', ?, TRUE, 100)
+                VALUES (?, ?, ?, 'CASH', ?, TRUE, 100)
                 """,
                 UUID.randomUUID(),
                 account,
+                wallet,
                 new BigDecimal("100.0000"));
     }
 
     @Test
     @DisplayName("places a hold, reads it back, releases it, and the money returns")
     void theFullHoldLifecycle() {
-        var created = assertThat(post("hold-1", "60.00")).hasStatus(201);
+        MvcTestResultAssert created = assertThat(post("hold-1", "60.00")).hasStatus(201);
         String reservationId =
                 created.bodyJson().extractingPath("$.reservation_id").asString().actual();
 
@@ -111,7 +116,7 @@ class ReservationApiIT {
     void refusesAnOverdraftThroughTheApi() {
         assertThat(post("hold-1", "60.00")).hasStatus(201);
 
-        var refused = assertThat(post("hold-2", "60.00"))
+        MvcTestResultAssert refused = assertThat(post("hold-2", "60.00"))
                 .hasStatus(409)
                 .hasContentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON);
 
@@ -121,8 +126,8 @@ class ReservationApiIT {
     @Test
     @DisplayName("a retried POST with the same Idempotency-Key returns the original hold")
     void replaysRatherThanHoldingTwice() {
-        var first = assertThat(post("same-key", "60.00")).hasStatus(201);
-        var retry = assertThat(post("same-key", "60.00")).hasStatus(201);
+        MvcTestResultAssert first = assertThat(post("same-key", "60.00")).hasStatus(201);
+        MvcTestResultAssert retry = assertThat(post("same-key", "60.00")).hasStatus(201);
 
         assertThat(retry.bodyJson().extractingPath("$.reservation_id").asString().actual())
                 .isEqualTo(first.bodyJson().extractingPath("$.reservation_id").asString().actual());
@@ -146,7 +151,7 @@ class ReservationApiIT {
     @Test
     @DisplayName("an unknown reservation is a 404 problem document, not a stack trace")
     void reportsAnUnknownReservation() {
-        var result = assertThat(mvc.get()
+        MvcTestResultAssert result = assertThat(mvc.get()
                         .uri("/v1/reservations/{id}", UUID.randomUUID())
                         .with(jwt().authorities(() -> READ)))
                 .hasStatus(404);

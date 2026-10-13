@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -50,7 +51,7 @@ class OverdraftIT {
         // itself against the test fixture is the rule working exactly as intended.
         jdbc.update("""
                 TRUNCATE ledger_entries, reservation_allocations, reservations,
-                         balance_buckets, account_balances, ledger_config
+                         balance_buckets, wallets, account_balances, ledger_config
                 """);
         jdbc.update("INSERT INTO ledger_config (currency, minor_units) VALUES ('EUR', 2)");
         account = accountWithCash(new BigDecimal("100.0000"));
@@ -62,7 +63,7 @@ class OverdraftIT {
     @DisplayName("two withdrawals 50ms apart cannot both be approved — the exact ADR-001 trace")
     void theTraceThatKilledAdr001() throws Exception {
         // t=0..4ms — withdrawal A is approved and its hold is committed
-        var a = ledger.reserve(account, new BigDecimal("60.0000"), "withdrawal-A", null);
+        LedgerService.Reservation a = ledger.reserve(account, new BigDecimal("60.0000"), "withdrawal-A", null);
         assertThat(a.state()).isEqualTo("HELD");
 
         Thread.sleep(50);   // the gap that defeated the lock: it was released 46ms ago
@@ -73,7 +74,7 @@ class OverdraftIT {
                 .isInstanceOf(LedgerService.InsufficientFunds.class)
                 .hasMessageContaining("40.0000");
 
-        var balance = ledger.balance(account);
+        LedgerService.Balance balance = ledger.balance(account);
         assertThat(balance.available()).isEqualByComparingTo("40.0000");
         assertThat(balance.posted()).isEqualByComparingTo("100.0000");   // nothing has settled yet
         assertThat(balance.held()).isEqualByComparingTo("60.0000");
@@ -83,12 +84,12 @@ class OverdraftIT {
     @DisplayName("eight concurrent withdrawals against a balance that funds one — exactly one wins")
     void concurrencyCannotOverdraw() throws Exception {
         int threads = 8;
-        var start = new CountDownLatch(1);
-        var pool = Executors.newFixedThreadPool(threads);
-        var accepted = new AtomicInteger();
-        var refused = new AtomicInteger();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        AtomicInteger accepted = new AtomicInteger();
+        AtomicInteger refused = new AtomicInteger();
 
-        var futures = new java.util.ArrayList<Future<?>>();
+        List<Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < threads; i++) {
             final String key = "concurrent-" + i;
             futures.add(pool.submit(() -> {
@@ -128,9 +129,9 @@ class OverdraftIT {
     @Test
     @DisplayName("the journal is append-only — an UPDATE silently changes nothing")
     void theJournalCannotBeRewritten() {
-        var bucket = jdbc.queryForObject(
+        UUID bucket = jdbc.queryForObject(
                 "SELECT bucket_id FROM balance_buckets WHERE account_id = ?", UUID.class, account);
-        var txn = UUID.randomUUID();
+        UUID txn = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO ledger_entries (entry_id, account_id, bucket_id, direction, amount, transaction_id)
                 VALUES (?, ?, ?, 'CREDIT', 100.0000, ?)
@@ -147,9 +148,9 @@ class OverdraftIT {
     @Test
     @DisplayName("settlement is idempotent — a redelivered event cannot double-post")
     void settlementCannotDoublePost() {
-        var bucket = jdbc.queryForObject(
+        UUID bucket = jdbc.queryForObject(
                 "SELECT bucket_id FROM balance_buckets WHERE account_id = ?", UUID.class, account);
-        var txn = UUID.randomUUID();
+        UUID txn = UUID.randomUUID();
         String insert = """
                 INSERT INTO ledger_entries (entry_id, account_id, bucket_id, direction, amount, transaction_id)
                 VALUES (?, ?, ?, 'DEBIT', 60.0000, ?)
@@ -165,19 +166,19 @@ class OverdraftIT {
     @Test
     @DisplayName("DEBT is an obligation, not a funding source")
     void debtCannotBeSpent() {
-        var indebted = accountWithCash(new BigDecimal("50.0000"));
+        UUID indebted = accountWithCash(new BigDecimal("50.0000"));
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, posted_balance,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)
-                VALUES (?, ?, 'DEBT', 100.0000, FALSE, 0)
-                """, UUID.randomUUID(), indebted);
+                VALUES (?, ?, ?, 'DEBT', 100.0000, FALSE, 0)
+                """, UUID.randomUUID(), indebted, realWalletOf(indebted));
         jdbc.update("UPDATE account_balances SET debt_total = 100.0000 WHERE account_id = ?", indebted);
 
         // 50 cash + 100 debt is not 150 of spending power.
         assertThatThrownBy(() -> ledger.reserve(indebted, new BigDecimal("80.0000"), "spend-the-debt", null))
                 .isInstanceOf(LedgerService.InsufficientFunds.class);
 
-        var b = ledger.balance(indebted);
+        LedgerService.Balance b = ledger.balance(indebted);
         assertThat(b.available()).isEqualByComparingTo("50.0000");
         assertThat(b.debt()).isEqualByComparingTo("100.0000");
     }
@@ -186,19 +187,19 @@ class OverdraftIT {
     @DisplayName("promotional money spends before cash, and only cash is withdrawable")
     void spendPriorityAndWithdrawability() {
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, source_module, grant_id,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, source_module, grant_id,
                                              posted_balance, withdrawable, wagering_remaining, spend_priority)
-                VALUES (?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
-                """, UUID.randomUUID(), account, UUID.randomUUID());
+                VALUES (?, ?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
+                """, UUID.randomUUID(), account, wallet(account, "BONUS"), UUID.randomUUID());
         jdbc.update("UPDATE account_balances SET posted_balance = posted_balance + 60.0000 WHERE account_id = ?",
                 account);
 
         // 160 to bet with, 100 of it withdrawable — the distinction a single balance cannot express.
-        var before = ledger.balance(account);
+        LedgerService.Balance before = ledger.balance(account);
         assertThat(before.available()).isEqualByComparingTo("160.0000");
         assertThat(before.withdrawable()).isEqualByComparingTo("100.0000");
 
-        var r = ledger.reserve(account, new BigDecimal("80.0000"), "mixed-stake", null);
+        LedgerService.Reservation r = ledger.reserve(account, new BigDecimal("80.0000"), "mixed-stake", null);
 
         // 60 of bonus (priority 10) before 20 of cash (priority 100) — the user does not
         // forfeit promotional money by spending cash first.
@@ -219,8 +220,8 @@ class OverdraftIT {
     @Test
     @DisplayName("a retried reserve returns the existing hold, never a second one")
     void retriesAreIdempotent() {
-        var first = ledger.reserve(account, new BigDecimal("60.0000"), "same-key", null);
-        var retry = ledger.reserve(account, new BigDecimal("60.0000"), "same-key", null);
+        LedgerService.Reservation first = ledger.reserve(account, new BigDecimal("60.0000"), "same-key", null);
+        LedgerService.Reservation retry = ledger.reserve(account, new BigDecimal("60.0000"), "same-key", null);
 
         assertThat(retry.reservationId()).isEqualTo(first.reservationId());
         assertThat(ledger.balance(account).held()).isEqualByComparingTo("60.0000");   // not 120
@@ -230,10 +231,11 @@ class OverdraftIT {
     @Test
     @DisplayName("the caller sets the hold lifetime, within the deployment's ceiling")
     void holdLifetimeBelongsToTheCaller() {
-        var wager = ledger.reserve(account, new BigDecimal("20.0000"), "three-day-wager", Duration.ofDays(3));
+        LedgerService.Reservation wager =
+                ledger.reserve(account, new BigDecimal("20.0000"), "three-day-wager", Duration.ofDays(3));
         assertThat(wager.expiresAt()).isAfter(java.time.Instant.now().plus(Duration.ofDays(2)));
 
-        var auth = ledger.reserve(account, new BigDecimal("20.0000"), "instant-purchase", null);
+        LedgerService.Reservation auth = ledger.reserve(account, new BigDecimal("20.0000"), "instant-purchase", null);
         assertThat(auth.expiresAt()).isBefore(java.time.Instant.now().plus(Duration.ofMinutes(6)));
 
         assertThatThrownBy(() -> ledger.reserve(account, new BigDecimal("1.0000"), "forever", Duration.ofDays(400)))
@@ -243,7 +245,7 @@ class OverdraftIT {
     @Test
     @DisplayName("releasing a hold returns the funds and writes no journal entry")
     void releaseLeavesNoTrace() {
-        var r = ledger.reserve(account, new BigDecimal("60.0000"), "to-be-released", null);
+        LedgerService.Reservation r = ledger.reserve(account, new BigDecimal("60.0000"), "to-be-released", null);
         ledger.release(r.reservationId());
 
         assertThat(ledger.balance(account).available()).isEqualByComparingTo("100.0000");
@@ -258,9 +260,9 @@ class OverdraftIT {
     @Test
     @DisplayName("settling a hold spends the money — posted falls, available does not move")
     void settleSpendsHeldMoney() {
-        var r = ledger.reserve(account, new BigDecimal("60.0000"), "settle-me", null);
+        LedgerService.Reservation r = ledger.reserve(account, new BigDecimal("60.0000"), "settle-me", null);
 
-        var before = ledger.balance(account);
+        LedgerService.Balance before = ledger.balance(account);
         assertThat(before.posted()).isEqualByComparingTo("100.0000");
         assertThat(before.held()).isEqualByComparingTo("60.0000");
         assertThat(before.available()).isEqualByComparingTo("40.0000");
@@ -270,7 +272,7 @@ class OverdraftIT {
         // The hold becomes a spend: 100 posted less the 60 captured, and the 60 that was held is
         // no longer held. Available was already 40 before settlement and must not move — the
         // money stopped being spendable when it was reserved, not when it was captured.
-        var after = ledger.balance(account);
+        LedgerService.Balance after = ledger.balance(account);
         assertThat(after.posted()).isEqualByComparingTo("40.0000");
         assertThat(after.held()).isEqualByComparingTo("0.0000");
         assertThat(after.available()).isEqualByComparingTo("40.0000");
@@ -280,23 +282,23 @@ class OverdraftIT {
     @DisplayName("settlement journals one debit per bucket the hold drew from")
     void settleJournalsOneDebitPerAllocation() {
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, source_module, grant_id,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, source_module, grant_id,
                                              posted_balance, withdrawable, wagering_remaining, spend_priority)
-                VALUES (?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
-                """, UUID.randomUUID(), account, UUID.randomUUID());
+                VALUES (?, ?, ?, 'BONUS', 'bonus', ?, 60.0000, FALSE, 600.0000, 10)
+                """, UUID.randomUUID(), account, wallet(account, "BONUS"), UUID.randomUUID());
         jdbc.update("UPDATE account_balances SET posted_balance = posted_balance + 60.0000 WHERE account_id = ?",
                 account);
 
         // 60 of bonus (priority 10) then 20 of cash (priority 100), as spendPriority... establishes.
-        var r = ledger.reserve(account, new BigDecimal("80.0000"), "journal-me", null);
-        var transaction = UUID.randomUUID();
+        LedgerService.Reservation r = ledger.reserve(account, new BigDecimal("80.0000"), "journal-me", null);
+        UUID transaction = UUID.randomUUID();
 
         ledger.settle(r.reservationId(), transaction);
 
         // The journal is read through the repository rather than by querying ledger_entries here:
         // what the entries mean is the dao layer's contract, and a service test that knew the
         // column names would break on a schema change that changed no behaviour.
-        var entries = journal.entriesFor(r.reservationId());
+        List<LedgerRepository.JournalEntryRow> entries = journal.entriesFor(r.reservationId());
         assertThat(entries).hasSize(2);
         assertThat(entries).allSatisfy(e -> {
             assertThat(e.direction()).isEqualTo("DEBIT");
@@ -318,10 +320,22 @@ class OverdraftIT {
         UUID id = UUID.randomUUID();
         jdbc.update("INSERT INTO account_balances (account_id, posted_balance) VALUES (?, ?)", id, cash);
         jdbc.update("""
-                INSERT INTO balance_buckets (bucket_id, account_id, bucket_type, posted_balance,
+                INSERT INTO balance_buckets (bucket_id, account_id, wallet_id, bucket_type, posted_balance,
                                              withdrawable, spend_priority)
-                VALUES (?, ?, 'CASH', ?, TRUE, 100)
-                """, UUID.randomUUID(), id, cash);
+                VALUES (?, ?, ?, 'CASH', ?, TRUE, 100)
+                """, UUID.randomUUID(), id, wallet(id, "REAL"), cash);
         return id;
+    }
+
+    /** Every bucket lives in a wallet (V2): CASH and DEBT in the REAL one, grants in BONUS. */
+    private UUID wallet(UUID accountId, String type) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO wallets (wallet_id, account_id, wallet_type) VALUES (?, ?, ?)", id, accountId, type);
+        return id;
+    }
+
+    private UUID realWalletOf(UUID accountId) {
+        return jdbc.queryForObject(
+                "SELECT wallet_id FROM wallets WHERE account_id = ? AND wallet_type = 'REAL'", UUID.class, accountId);
     }
 }

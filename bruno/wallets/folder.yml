@@ -1,0 +1,18 @@
+info:
+  name: Wallets
+  type: folder
+  seq: 1
+
+request:
+  auth: inherit
+
+docs:
+  content: |-
+    An account's money containers. `REAL` holds its cash, `BONUS` its promotional grants, one
+    bucket per grant, and an account has at most one wallet of each type. `ACTIVE` money can be spent,
+    `FROZEN` money stays where it is but cannot be, and `CLOSED` is terminal, reachable only when the
+    wallet is empty.
+
+    Reads need `ledger:read`; opening, freezing and closing need `ledger:write`. The `local` profile
+    grants both.
+  type: text/markdown

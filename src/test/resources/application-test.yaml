@@ -31,6 +31,10 @@ logging:
 app:
   environment: test
 
+ledger:
+  # The currency the test fixtures write into ledger_config, so the startup check agrees with them.
+  currency: EUR
+
 vaullet:
   api:
     allowed-origins: ""

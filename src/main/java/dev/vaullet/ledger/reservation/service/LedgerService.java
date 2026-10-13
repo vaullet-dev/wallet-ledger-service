@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -67,15 +68,15 @@ public class LedgerService {
 
         // (1) Lock the account before reading anything else. Everything below this line is
         // serialized against every other balance-changing operation on this account.
-        var account = ledger.lockAccount(accountId)
+        LedgerRepository.AccountRow account = ledger.lockAccount(accountId)
                 .orElseThrow(() -> new AccountNotFound("no account " + accountId));
 
         // (2) Idempotency. A retried reserve must return the existing hold, never place a second
         // one. Two racing requests with the same key are already serialized by the lock above,
         // so this read-then-insert is safe; the UNIQUE constraint is the backstop, not the plan.
-        var existing = ledger.findByIdempotencyKey(idempotencyKey);
+        Optional<LedgerRepository.ReservationRow> existing = ledger.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
-            var row = existing.get();
+            LedgerRepository.ReservationRow row = existing.get();
             return new Reservation(row.reservationId(), row.amount(), row.state(), row.expiresAt(),
                     allocationsOf(row.reservationId()));
         }
@@ -96,19 +97,20 @@ public class LedgerService {
         // spent before money that keeps.
         List<Allocation> allocations = new ArrayList<>();
         BigDecimal remaining = amount;
-        for (var bucket : ledger.allocatableBuckets(accountId)) {
+        for (LedgerRepository.BucketRow bucket : ledger.allocatableBuckets(accountId)) {
             if (remaining.signum() == 0) break;
             BigDecimal take = bucket.available().min(remaining);
             allocations.add(new Allocation(bucket.bucketId(), bucket.bucketType(), take));
             remaining = remaining.subtract(take);
         }
 
-        // The aggregate said yes but the buckets cannot cover it. Reachable when a bucket has
-        // expired and the sweeper has not yet zeroed it, so posted_balance is briefly stale.
-        // Rejecting is correct: never hold money no bucket can fund.
+        // The aggregate said yes but the buckets cannot cover it. Reachable when part of the balance
+        // sits in a frozen wallet, which the aggregate still counts and the allocation skips, or in
+        // a bucket that has expired and that the sweeper has not yet zeroed. Rejecting is correct:
+        // never hold money no bucket can fund.
         if (remaining.signum() > 0) {
             throw new InsufficientFunds("allocatable balance short by " + remaining
-                    + " (expired buckets not yet swept)");
+                    + " (frozen wallets and expired buckets cannot fund a hold)");
         }
 
         UUID reservationId = UUID.randomUUID();
@@ -138,7 +140,7 @@ public class LedgerService {
      */
     @Transactional(readOnly = true)
     public Reservation find(UUID reservationId) {
-        var reservation = ledger.findReservation(reservationId)
+        LedgerRepository.ReservationRow reservation = ledger.findReservation(reservationId)
                 .orElseThrow(() -> new EmptyResultDataAccessException(1));
         return new Reservation(
                 reservation.reservationId(),
@@ -156,7 +158,7 @@ public class LedgerService {
      */
     @Transactional
     public void settle(UUID reservationId, UUID transactionId) {
-        var reservation = ledger.findReservation(reservationId)
+        LedgerRepository.ReservationRow reservation = ledger.findReservation(reservationId)
                 .orElseThrow(() -> new EmptyResultDataAccessException(1));
 
         // Account first, always. account_balances is the only row locked on the money path, so
@@ -168,7 +170,7 @@ public class LedgerService {
         // has to say which money was spent, not merely how much: a 80 stake funded by 60 of bonus
         // and 20 of cash is two different obligations, and a single aggregate entry loses the
         // distinction that withdrawability and wagering both depend on.
-        for (var a : ledger.allocationsOf(reservationId)) {
+        for (LedgerRepository.AllocationRow a : ledger.allocationsOf(reservationId)) {
             ledger.postDebit(reservation.accountId(), a.bucketId(), a.amount(), reservationId, transactionId);
             ledger.captureBucket(a.bucketId(), a.amount());
         }
@@ -182,14 +184,14 @@ public class LedgerService {
         // Unknown reservation surfaces as EmptyResultDataAccessException, as it did before the
         // dao split. It wants to be a typed domain error, but that is a behaviour change and
         // belongs with the common/error work, not with a refactor the tests are guarding.
-        var reservation = ledger.findReservation(reservationId)
+        LedgerRepository.ReservationRow reservation = ledger.findReservation(reservationId)
                 .orElseThrow(() -> new EmptyResultDataAccessException(1));
 
         // Account first, always — even here, where it looks unnecessary.
         ledger.lockAccount(reservation.accountId());
         if (!"HELD".equals(reservation.state())) return;   // already settled, released or expired
 
-        for (var a : ledger.allocationsOf(reservationId)) {
+        for (LedgerRepository.AllocationRow a : ledger.allocationsOf(reservationId)) {
             ledger.addBucketHold(a.bucketId(), a.amount().negate());
         }
         ledger.addAccountHold(reservation.accountId(), reservation.amount().negate());
@@ -200,12 +202,16 @@ public class LedgerService {
     public Balance balance(UUID accountId) {
         // As above: unknown account surfaces as EmptyResultDataAccessException here, while
         // reserve() maps it to AccountNotFound. Making the two agree is a behaviour change.
-        var account = ledger.accountBalance(accountId)
+        LedgerRepository.AccountBalanceRow account = ledger.accountBalance(accountId)
                 .orElseThrow(() -> new EmptyResultDataAccessException(1));
+        // Posted, held and debt are the account's totals. What can be spent or withdrawn counts only
+        // the money the reserve path would draw on: not a frozen wallet's, not a lapsed grant's. So
+        // available is posted - held only while neither exists, and both figures are the sums of
+        // the account's wallet balances.
         return new Balance(
                 account.posted(),
                 account.held(),
-                account.posted().subtract(account.held()),
+                ledger.available(accountId),
                 ledger.withdrawable(accountId),
                 account.debt());
     }

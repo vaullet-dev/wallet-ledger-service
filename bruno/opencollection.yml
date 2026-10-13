@@ -1,0 +1,51 @@
+opencollection: 1.0.0
+
+info:
+  name: wallet-ledger-service
+  version: "1"
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ""
+      port: ""
+      auth:
+        username: ""
+        password: ""
+      bypassProxy: ""
+
+docs:
+  content: |
+    # wallet-ledger-service
+
+    The ledger's wallets, called by hand: open an account's REAL and BONUS wallets, read them and their
+    balances, freeze and unfreeze one, and close both. The OpenAPI document at `/swagger-ui.html` is the
+    reference; this is for calling them.
+
+    ## Environment
+
+    **local** only, for now — `./mvnw spring-boot:run`. The `local` profile runs every request as the
+    anonymous principal with `ledger:read` and `ledger:write`, so there is no sign-in and the collection
+    sends no token: its auth is *No Auth*. The ledger is not deployed yet. When it is, the collection
+    gets a `prod` environment that signs in through Keycloak with OAuth2, as auth-service's does.
+
+    ## Flow
+
+    Run the *Wallets* folder top to bottom. *Open REAL wallet* keeps `real_wallet_id` and *Open BONUS
+    wallet* keeps `bonus_wallet_id` for the requests under them, which read both wallets, freeze and
+    unfreeze the REAL one, and close both.
+
+    Closing is terminal: run the folder again against the same `account_id` and *Open REAL wallet*
+    answers `409 WALLET_CLOSED`. Set `account_id` in the environment to a fresh UUID first. Any UUID
+    will do; the ledger opens the account with its first wallet.
+
+    Reservations are not in the collection yet. Until credits land there is no way to put money into an
+    account through the API, so a hold could only ever answer `409 INSUFFICIENT_FUNDS`.
+  type: text/markdown
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git

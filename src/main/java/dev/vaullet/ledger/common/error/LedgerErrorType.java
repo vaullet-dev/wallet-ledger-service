@@ -54,7 +54,16 @@ public enum LedgerErrorType implements ErrorType {
      * with {@code Retry-After} rather than a 500: the same request a moment later is very likely to
      * succeed. ADR-004 tracks it as {@code vaullet.row_lock.wait.p95}.
      */
-    ACCOUNT_BUSY("account-busy", HttpStatus.SERVICE_UNAVAILABLE, "Account temporarily busy");
+    ACCOUNT_BUSY("account-busy", HttpStatus.SERVICE_UNAVAILABLE, "Account temporarily busy"),
+
+    /**
+     * The wallet is closed: no new money, no freezing or unfreezing, and no second wallet of the
+     * same type for the account. Closing is terminal.
+     */
+    WALLET_CLOSED("wallet-closed", HttpStatus.CONFLICT, "Wallet closed"),
+
+    /** Closing a wallet that still has posted money, a hold or a debt. */
+    WALLET_NOT_EMPTY("wallet-not-empty", HttpStatus.CONFLICT, "Wallet not empty");
 
     private final URI type;
     private final HttpStatus status;

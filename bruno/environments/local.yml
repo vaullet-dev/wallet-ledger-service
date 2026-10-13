@@ -1,0 +1,8 @@
+name: local
+variables:
+  - name: base_url
+    value: http://localhost:8080
+    description: ./mvnw spring-boot:run, with Compose's PostgreSQL.
+  - name: account_id
+    value: 7e57a11c-0000-4000-8000-000000000001
+    description: Any UUID; closing is terminal, so use a fresh one to run the folder again.
