@@ -1,0 +1,19 @@
+# ClusterIP, and nothing in front of it: there is no HTTPRoute. ADR-008 has the
+# ledger called by services holding client-credentials tokens, never with a
+# user's token, and every such caller is inside the cluster. A route on
+# vaullet.dev would put the endpoint that commits money in front of everyone
+# holding a token from the realm, to serve no caller at all.
+#
+# Callers in the cluster use this Service directly. A person reaches it the same
+# way, from inside, with a token from client ledger-ops (README, "Deploying"):
+#
+#   kubectl -n wallet-ledger port-forward svc/ledger-service 18081:80
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-service
+spec:
+  type: ClusterIP
+  selector: { app: ledger-service }
+  ports:
+    - { name: http, port: 80, targetPort: http }
