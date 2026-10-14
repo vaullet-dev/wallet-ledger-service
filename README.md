@@ -20,7 +20,7 @@ deliberately differs from the platform default.
 ```
 ./mvnw spring-boot:run     # PostgreSQL via Compose, Flyway migrates, serves on :8080
 ./mvnw test                # 82 unit + slice + architecture tests, no Docker  (~5s)
-./mvnw verify              # adds 52 integration tests on real PostgreSQL     (~25s)
+./mvnw verify              # adds 69 integration tests on real PostgreSQL     (~25s)
 ```
 
 > `dev.vaullet:common-*` 1.0.0 resolves from GitHub Packages, which requires authentication even for
@@ -28,7 +28,8 @@ deliberately differs from the platform default.
 > wallet-auth-service.
 
 Then open <http://localhost:8080/swagger-ui.html>, or the collection in [`bruno/`](bruno) — see
-[Calling it by hand](#calling-it-by-hand).
+[Calling it by hand](#calling-it-by-hand). The ledger in the cluster is reachable from inside it only;
+[Deploying](#deploying) says how it runs there and how to reach it.
 
 ---
 
@@ -172,10 +173,14 @@ account balance, kept in this repository so a request changes in the same pull r
 endpoint. It is in Bruno's YAML format, which needs Bruno 3.1 or later: *Open Collection* on the
 folder.
 
-It has one environment, `local` (`http://localhost:8080`), and no sign-in: the `local` profile runs
-every request as the anonymous principal with `ledger:read` and `ledger:write`, so the collection's
-auth is *No Auth*. The ledger is not deployed yet. When it is, the collection gets a `prod`
-environment that signs in through Keycloak with OAuth2, like auth-service's.
+| Environment | Base URL | Sign-in |
+| --- | --- | --- |
+| `local` | `http://localhost:8080` | None. The `local` profile runs every request as the anonymous principal with `ledger:read` and `ledger:write`, and the environment's empty `oauth2_token_url` keeps Bruno from asking for a token. |
+| `prod` | `http://localhost:18081`, a port-forward to the cluster | OAuth2 client credentials as Keycloak client `ledger-ops`, which holds both scopes. Set the environment's secret `oauth2_client_secret` first: Bruno keeps secret values on the machine and out of the files. See [Deploying](#deploying). |
+
+OAuth2 is set once, on the collection, and sends the client credentials in the form body rather than
+a Basic header: Bruno does not form-encode a Basic header's id and secret first, Keycloak decodes them
+as if it had, and a generated secret with a `+` in it would never match.
 
 The *Wallets* folder, run top to bottom, opens a `REAL` and a `BONUS` wallet for the environment's
 `account_id`, reads them and the account balance, freezes and unfreezes the `REAL` one, and closes
@@ -183,6 +188,11 @@ both. *Open REAL wallet* keeps `real_wallet_id` and *Open BONUS wallet* keeps `b
 the requests under them. Closing is terminal, so set `account_id` to a fresh UUID before the next run;
 against the same one, *Open REAL wallet* answers `409 WALLET_CLOSED`. Every request asserts its
 status, so `bru run --env local` in `bruno/` (the CLI, `@usebruno/cli`) checks a local run end to end.
+
+In `prod` nothing removes what a run leaves behind: `ledger_app` deletes nothing, and a closed wallet
+stays closed. So `prod`'s `account_id` starts empty, and a folder run there belongs on an account made
+for it. Client credentials need no browser, so the CLI runs `prod` too, given the secret:
+`bru run --env prod --env-var oauth2_client_secret="$LEDGER_OPS_SECRET" --env-var account_id=…`.
 
 Reservations are not in it yet. Until credits land, nothing puts money into an account through the
 API, so a hold could only ever answer `409 INSUFFICIENT_FUNDS`.
@@ -313,6 +323,7 @@ and releases from a Kafka listener, which has no request to bind.
 | Wallets | `WalletServiceIT` | `@IntegrationTest` + Testcontainers | 27 |
 | Migration | `WalletsMigrationIT` | Flyway's API on its own schema | 3 |
 | Startup | `LedgerConfigProvisionerIT` | `@IntegrationTest` + Testcontainers | 4 |
+| Grants | `AppRoleGrantsIT` | `@IntegrationTest`, connected as `ledger_app` | 17 |
 
 The slice tests name the security chain with
 `@ImportAutoConfiguration(PlatformSecurityAutoConfiguration.class)` rather than `@Import`: a
@@ -334,6 +345,15 @@ against a balance funding one leave exactly one winner, that the schema refuses 
 when the application logic is wrong, that the journal cannot be rewritten, and that `DEBT` cannot be
 spent.
 
+`AppRoleGrantsIT` is the deployed role's. Every other test connects as the database's owner, which
+may do anything, so a grant missing from V3 would show only in production. It builds the
+repositories and services by hand on a connection that is `ledger_app`'s, with a
+`TransactionTemplate` standing in for `@Transactional`, and runs the real paths through it: open,
+freeze, unfreeze and close; reserve, settle and release; every balance read. Then it asserts the
+refusals, by SQLSTATE `42501` rather than by message: no `DELETE` or `TRUNCATE` anywhere, no `UPDATE`
+of what is written once, no `INSERT` into `ledger_config`, nothing on `flyway_schema_history`, no DDL.
+V3 leaves the role `NOLOGIN`, so each test lends it a login and takes it back.
+
 **Testcontainers, not H2.** Every load-bearing part of this schema is PostgreSQL-specific:
 `SELECT … FOR UPDATE`, partial and functional unique indexes, `NUMERIC(20,4)`, `TIMESTAMPTZ`,
 `make_interval`, and the `DO INSTEAD NOTHING` rules that make `ledger_entries` append-only. An
@@ -353,7 +373,8 @@ a second context for the same suite.
 | *(none)* | `java -jar` | Secure by default. Requires `OAUTH2_ISSUER_URI`, and `LEDGER_CURRENCY` against a database that has no currency yet; refuses to start without them. |
 | `local` | `./mvnw spring-boot:run` | Compose-managed database, permissive HTTP security, method security still on, SQL logging, all Actuator endpoints, 100% trace sampling. |
 | `test` | test classes | Testcontainers, 100% sampling. |
-| `prod` | `SPRING_PROFILES_ACTIVE=prod` | ECS JSON logs, Compose off, tuned pools. |
+| `prod` | the Deployment, `SPRING_PROFILES_ACTIVE=prod` | ECS JSON logs, Compose off, tuned pools, and Flyway **off**: the service holds `ledger_app` and never migrates. |
+| `migrate` | the migration Job, `SPRING_PROFILES_ACTIVE=prod,migrate` | Flyway on, no web server, `statement_timeout` lifted, a pool of two. Migrates, provisions `ledger_config` and exits. |
 
 `application-local.yaml` is committed, unlike in the template, which gitignores it. A clean checkout
 that lacks the profile `spring-boot:run` activates starts with a different security posture than
@@ -391,12 +412,110 @@ rather than letting every balance be reported in the wrong one. ADR-004 writes t
 never updates it, so changing it is a migration, not a configuration change. `LEDGER_CURRENCY` sets
 it (ISO 4217, upper case), `ledger.minor-units` (`LEDGER_MINOR_UNITS`) defaults to that currency's
 own fraction digits and is checked against the row the same way, and the `local` profile and the
-tests use EUR. Every deployment must set `LEDGER_CURRENCY`.
+tests use EUR. Every deployment must set `LEDGER_CURRENCY`. In the cluster the first start is the
+migration Job, and the service only checks the row; see [Deploying](#deploying).
 
 `statement_timeout` is set to 1s on every connection (`connection-init-sql`). A reserve that cannot
 take the account row lock in that time gives up, and the caller gets `503 ACCOUNT_BUSY` with a
 `Retry-After` rather than a thread parked indefinitely. It applies in tests too, so a deadlock fails
-the build in a second instead of hanging it.
+the build in a second instead of hanging it. The `migrate` profile lifts it for the migration Job:
+an `ALTER` that rewrites the journal is not a stuck reserve, and killing it at 1s would leave the
+schema half-moved.
+
+---
+
+## Deploying
+
+The ledger runs in the prod cluster the way wallet-auth-service does: Argo CD reconciles namespace
+`wallet-ledger` to [`kustomization.yaml`](kustomization.yaml) at the root of `master`, and the
+Application itself lives in gitops. **It has no HTTPRoute.** ADR-008 has the ledger called by services
+holding client-credentials tokens, never with a user's token, and every such caller is inside the
+cluster. A route on vaullet.dev would put the endpoint that commits money in front of everyone with
+a token from the realm, and serve no caller at all.
+
+| File | What it is |
+| --- | --- |
+| [`k8s/migrate-job.yaml`](k8s/migrate-job.yaml) | Job `ledger-migrate`, an Argo Sync hook in wave 0: Flyway as `ledger_migrator`, profiles `prod,migrate` |
+| [`k8s/deployment.yaml`](k8s/deployment.yaml) | Deployment `ledger-service`, wave 1: the service as `ledger_app`, profile `prod` |
+| [`k8s/service.yaml`](k8s/service.yaml) | Service `ledger-service`: ClusterIP, port 80 to the container's 8080 |
+| [`k8s/externalsecret-db-migrator.yaml`](k8s/externalsecret-db-migrator.yaml), [`…-db-app.yaml`](k8s/externalsecret-db-app.yaml) | The two credentials, from OpenBao's `kv/wallet-ledger/db-migrator` and `kv/wallet-ledger/db-app`, through ClusterSecretStore `openbao-wallet-ledger` |
+| [`k8s/serviceaccount.yaml`](k8s/serviceaccount.yaml) | `secrets-reader`, which External Secrets logs in to OpenBao as |
+| [`kustomization.yaml`](kustomization.yaml) | The namespace, the generated ConfigMap `ledger-config` (`LEDGER_CURRENCY=EUR`), and the image tag |
+
+**Two roles, and neither process can do the other's job.** `vaullet` owns `vaullet_db` in the
+CloudNativePG cluster `money` (ADR-003). `ledger_migrator`, a member of `vaullet`, runs Flyway and
+owns every table; `ledger_app`, which the service connects as, holds only what
+[`V3__grant_app_role.sql`](src/main/resources/db/migration/V3__grant_app_role.sql) gives it:
+
+| Table | `ledger_app` may | Because |
+| --- | --- | --- |
+| `ledger_entries`, `reservation_allocations` | `SELECT`, `INSERT` | written once, never changed |
+| `account_balances`, `balance_buckets`, `reservations` | `SELECT`, `INSERT`, `UPDATE` | balances and holds move; `SELECT … FOR UPDATE` on the account row needs `UPDATE` too |
+| `wallets` | `SELECT`, `INSERT`, `UPDATE` | opened, then frozen, unfrozen and closed in place |
+| `ledger_config` | `SELECT` | written once, by the migration Job |
+| `flyway_schema_history` | nothing | so that `validate-on-migrate` can trust it |
+
+No `DELETE` and no `TRUNCATE` anywhere, and no DDL. A table a later migration creates gets `SELECT`
+and `INSERT` by default: append-only, until its own migration grants more next to its `CREATE TABLE`.
+One thing a missing privilege cannot do: on `ledger_entries`, V1's RULEs rewrite an `UPDATE` or a
+`DELETE` into nothing before PostgreSQL checks privileges, so `ledger_app` gets the same silent
+`UPDATE 0` the owner gets, not an error. What the withheld privileges add there is `TRUNCATE`, which
+no rule sees.
+
+**The Job runs first, and the Deployment waits for it.** Both are applied by the same sync, the Job in
+wave 0 and the Deployment in wave 1, so Argo rolls the Deployment only once the Job has succeeded. A
+new version therefore never starts in front of a schema it was not built for, and a failed migration
+fails the sync and leaves the running version as it was. The first deploy depends on the order too:
+the Job starts the whole application context without a web server, so `LedgerConfigProvisioner` runs
+there and records `LEDGER_CURRENCY` in `ledger_config`. The service, which may only read that row,
+would refuse to start without it.
+
+**The currency is set once, in `kustomization.yaml`.** The ConfigMap is generated, so kustomize puts
+a hash of its content in the name, and changing the value changes both pod specs. The next sync's Job
+then fails on the mismatch (`ledger.currency is USD, but this ledger was provisioned in EUR`) before a
+single pod rolls. With a plain ConfigMap the same failure would wait for the next restart of a pod,
+whenever that happened to be.
+
+**The image tag in `kustomization.yaml` is the deployment.** The release job builds, pushes and tags
+an image and deploys nothing; a version reaches the cluster when `newTag` is bumped, by hand, in a
+`chore(deploy): …` commit. `chore` releases nothing, while a releasing type would cut a new version
+of an image identical to the one it points at. 0.2.0 is the floor: older images have neither the
+`migrate` profile nor V3.
+
+**Calling it.** From inside the cluster, through a port-forward, with a token from Keycloak's client
+`ledger-ops`: client credentials only, holding `ledger:read` and `ledger:write`. The Kubernetes API is
+reachable over SSH only (gitops README, "Reaching things"), so the port-forward runs on the server and
+an SSH tunnel brings it here. 18081 rather than 8080, so a local `spring-boot:run` and the tunnel can
+be up at the same time.
+
+```
+ssh -L 18081:localhost:18081 root@<IP> \
+  'kubectl -n wallet-ledger port-forward svc/ledger-service 18081:80'
+
+TOKEN=$(curl -s https://vaullet.dev/auth/realms/vaullet/protocol/openid-connect/token \
+          -d grant_type=client_credentials -d client_id=ledger-ops \
+          --data-urlencode client_secret="$LEDGER_OPS_SECRET" \
+          --data-urlencode 'scope=ledger:read ledger:write' | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:18081/v1/wallets?account_id=…"
+```
+
+`/actuator/info` and `/actuator/health` need no token, so `curl localhost:18081/actuator/info` says
+which build is running. The collection's `prod` environment does the same as the commands above; see
+[Calling it by hand](#calling-it-by-hand).
+
+**What has to exist first**, all of it gitops' (#29): the Argo Application (namespace
+`wallet-ledger`, this repository, `master`, path `.`); `ledger_migrator`, a member of `vaullet`, and
+`ledger_app` as managed roles of the `money` cluster, with their passwords read into `postgres` from
+the same OpenBao paths this repository reads; `03-openbao.sh onboard wallet-ledger` and the
+ClusterSecretStore `openbao-wallet-ledger`; Keycloak's `ledger:read` and `ledger:write` client scopes
+and the client `ledger-ops`. The two passwords and the client's secret are put into OpenBao once,
+with values you generate:
+
+```
+bao kv put kv/wallet-ledger/db-migrator     password="$(openssl rand -base64 24)"
+bao kv put kv/wallet-ledger/db-app          password="$(openssl rand -base64 24)"
+bao kv put kv/wallet-ledger/keycloak-client secret="$(openssl rand -base64 32)"
+```
 
 ---
 
@@ -460,14 +579,14 @@ does not yet implement, the fourth is cleanup, and the last two are where the wa
    `WalletController` only to keep one convention until all of them move.
 5. **Who may freeze or close a wallet, and the scopes in Keycloak.** The wallet endpoints are checked
    by scope only, like the rest of the ledger, so any caller holding `ledger:write` can freeze or
-   close a wallet as well as place a hold. Which staff roles may freeze or close one is not decided,
-   and the `ledger:*` scopes are not in the realm yet; both come with the ledger's deployment
-   (Kubernetes, the GitOps app, Keycloak), which is a separate issue. Reconciling ADR-008's
+   close a wallet as well as place a hold. Which staff roles may freeze or close one is not decided.
+   The `ledger:*` scopes reach the realm with the deployment (gitops#29), and for now only one client
+   holds them, `ledger-ops`, for calls by hand (see [Deploying](#deploying)). Reconciling ADR-008's
    `ledger:reserve` for the money path (see [Security](#security)) would also separate the two.
 6. **Nothing opens a wallet on its own.** ADR-014 §7 has the ledger consume
    `identity.account-created.v1` and create the account's row and `CASH` bucket. With wallets, that
-   consumer would open the account's `REAL` wallet, which today is a `POST /v1/wallets` someone makes
-   by hand. End users reading their own wallets is not built either: every route is for callers
+   consumer would open the account's `REAL` and `BONUS` wallets, which today are two
+   `POST /v1/wallets` calls someone makes by hand. End users reading their own wallets is not built either: every route is for callers
    holding the ledger scopes.
 
 ### Naming, still undecided

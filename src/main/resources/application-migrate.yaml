@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# The migration Job. Not a web application: this profile runs Flyway,
+# provisions ledger_config, and exits.
+#
+# Activated as SPRING_PROFILES_ACTIVE=prod,migrate, in that order, so the Job
+# inherits production's hardening (ECS logging, log levels, Compose off) and
+# overrides only the few things that differ. Profile order matters: later wins,
+# so `migrate` beats `prod`'s flyway.enabled=false. Reversing the two silently
+# produces a Job that starts, migrates nothing, and exits 0.
+#
+# It runs the SAME IMAGE as the Deployment, with a different Secret mounted. One
+# artefact, so the Flyway version that migrates is by construction the one the
+# application was compiled against.
+#
+#   Argo sync wave 0   Job         DB_* from kv/wallet-ledger/db-migrator   (DDL)
+#   Argo sync wave 1   Deployment  DB_* from kv/wallet-ledger/db-app        (no DDL)
+#
+# The property names are identical in both. Which identity this process runs as
+# is decided by the pod spec, never by configuration in this repository.
+#
+# The whole application context still starts, and that is what writes
+# ledger_config: LedgerConfigProvisioner runs after Flyway, records
+# LEDGER_CURRENCY on the first run and checks it on every later one. A Job
+# configured for another currency than the one recorded therefore fails here,
+# before the Deployment rolls, and the running service is left as it was.
+# ---------------------------------------------------------------------------
+spring:
+  main:
+    # No servlet container, no port, nothing to probe.
+    #
+    # This also switches OFF the entire security stack, and that is intended
+    # rather than incidental: backend-common's PlatformSecurityAutoConfiguration is
+    # @ConditionalOnWebApplication(SERVLET), so with no web application there is
+    # no SecurityFilterChain and no JwtDecoder. The Job needs no OAUTH2_ISSUER_URI
+    # and does not depend on Keycloak being up to migrate a schema.
+    web-application-type: none
+    # Explicit, because it is the property that decides whether this Job ever
+    # finishes. With no web server and nothing keeping the context alive, main()
+    # returns, the shutdown hook closes the context and the JVM exits: 0 on
+    # success, non-zero if Flyway or the provisioner threw, which is exactly the
+    # contract a Job wants.
+    keep-alive: false
+
+  flyway:
+    # ON, overriding prod. This process exists for this line.
+    enabled: true
+
+  datasource:
+    hikari:
+      # The statement timeout is LIFTED here. application.yaml sets 1s on every
+      # connection so that a reserve stuck behind a row lock gives up with
+      # 503 ACCOUNT_BUSY instead of parking a thread. A migration is not a
+      # reserve: an ALTER that rewrites ledger_entries legitimately takes minutes,
+      # and killing it at 1s would leave the schema half-moved with a Flyway
+      # history row claiming failure. 0 disables the limit for this process only.
+      connection-init-sql: SET statement_timeout = 0
+      # Flyway takes one connection and an advisory lock. Ten would be nine idle
+      # connections held for the length of the migration, against a database
+      # that may be mid-deploy and short of slots.
+      maximum-pool-size: 2
+      minimum-idle: 0
+      # Off, for the same reason as the timeout. Flyway holds its connection for
+      # the whole migration, so a long one would log a "connection leak" stack
+      # trace at the top of the log someone reads when the Job failed.
+      leak-detection-threshold: 0

@@ -28,6 +28,9 @@ spring:
     import: "classpath:vaullet/platform-defaults.yaml"
 
   datasource:
+    # ONE credential. WHICH identity this is depends on the workload, not on this file:
+    # the Deployment mounts ledger_app, the migration Job mounts ledger_migrator, and the
+    # property names are identical in both. See the `migrate` profile.
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ledger}
     username: ${DB_USERNAME:ledger}
     password: ${DB_PASSWORD:ledger}
@@ -36,6 +39,10 @@ spring:
       # statement timeout bounds head-of-line blocking on a hot account. A reserve that
       # cannot take the account row lock within a second gives up, and the caller gets
       # 503 ACCOUNT_BUSY with a Retry-After rather than a thread parked indefinitely.
+      #
+      # Locally and in tests Flyway shares this pool and this limit, which is fine while
+      # the migrations are small. In a cluster they run in the migration Job, whose
+      # `migrate` profile lifts it.
       connection-init-sql: SET statement_timeout = '1s'
       # Small pools beat large ones: the database, not the app, is the bottleneck, and a
       # pool bigger than the database's worker count just moves the queue. Doubly true
@@ -53,6 +60,10 @@ spring:
       leak-detection-threshold: 30000
 
   flyway:
+    # ON here, because "here" is a laptop or a test database, where the connecting role
+    # owns the schema and migrating at startup is the fastest way to a working one. OFF
+    # in prod (application-prod.yaml): the migration Job runs Flyway as ledger_migrator,
+    # and the service, holding ledger_app, could not.
     enabled: true
     locations: classpath:db/migration
     # Refuse to run against a database whose history does not match — a checksum

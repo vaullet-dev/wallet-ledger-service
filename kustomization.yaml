@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wallet-ledger
+# No HTTPRoute, unlike wallet-auth-service: the ledger is reachable from inside the
+# cluster only (ADR-008). See k8s/service.yaml.
+resources:
+  - k8s/serviceaccount.yaml
+  - k8s/externalsecret-db-migrator.yaml
+  - k8s/externalsecret-db-app.yaml
+  - k8s/migrate-job.yaml
+  - k8s/deployment.yaml
+  - k8s/service.yaml
+
+# The deployment's currency, ISO 4217 (ADR-004). The migration Job's first run records
+# it in ledger_config, and nothing changes it there afterwards; the Job and the service
+# both read it from here.
+#
+# Generated rather than a plain ConfigMap under k8s/, for the name: kustomize appends a
+# hash of the content, so a changed value changes both pod specs. The Job then fails the
+# sync on the mismatch, loudly, before a single pod rolls. A plain ConfigMap would change
+# under pods that read it only at start, and the same failure would wait for the next
+# restart, whenever that happened to be.
+#
+# Moving a live deployment to another currency is a migration, not an edit to this line.
+configMapGenerator:
+  - name: ledger-config
+    literals:
+      - LEDGER_CURRENCY=EUR
+
+# This one line IS the deployment: Argo CD reconciles the cluster to whatever tag is
+# committed here. It is bumped BY HAND for now -- the release job builds and pushes an
+# image and tags the commit, and deploys nothing. Bump it with a no-release commit type
+# (chore(deploy): ...), or the bump itself cuts a release of an image identical to the
+# one it points at.
+#
+# 0.2.0 is the release this change cuts (feat:, after 0.1.0). If Argo syncs before the
+# release job has pushed it, the Job's pod waits in ImagePullBackOff until it has. It is
+# also the floor: older images have neither the `migrate` profile the Job runs nor the
+# V3 grants the Deployment's role needs to read a single table.
+images:
+  - name: ghcr.io/vaullet-dev/ledger-service
+    newTag: "0.2.0"

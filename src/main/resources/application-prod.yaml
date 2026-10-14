@@ -1,11 +1,35 @@
 # ---------------------------------------------------------------------------
 # Deployed environments. Nothing here has a hard-coded value that differs
-# between staging and production — those come from the environment.
+# between staging and production — those come from the environment, and every
+# credential comes from OpenBao through External Secrets as a mounted
+# Kubernetes Secret (k8s/).
+#
+# The pod spec sets SPRING_PROFILES_ACTIVE=prod. The migration Job runs
+# prod,migrate, so it inherits everything here that application-migrate.yaml
+# does not override.
 # ---------------------------------------------------------------------------
 spring:
   docker:
     compose:
       enabled: false
+
+  flyway:
+    # OFF. This is the decision, and it is one line.
+    #
+    # Migrations run as a separate Kubernetes Job from the `migrate` profile
+    # (k8s/migrate-job.yaml), holding ledger_migrator. This process holds
+    # ledger_app, which has no DDL rights and never sees the migrator credential,
+    # so "the ledger cannot drop its own journal" is a property of what is
+    # mounted rather than a promise in a document. Left on, Flyway would not even
+    # get as far as validating: V3 grants ledger_app nothing on
+    # flyway_schema_history, so the start would fail.
+    #
+    # The cost, stated so nobody rediscovers it during an incident: a rollback
+    # puts the previous image in front of a forward schema, which is survivable
+    # only while migrations stay backward-compatible. Expand, then contract, and
+    # never a destructive change in the same release as the code that stops
+    # needing the column.
+    enabled: false
 
 logging:
   structured:

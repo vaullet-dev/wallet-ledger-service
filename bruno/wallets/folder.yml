@@ -14,5 +14,5 @@ docs:
     wallet is empty.
 
     Reads need `ledger:read`; opening, freezing and closing need `ledger:write`. The `local` profile
-    grants both.
+    grants both, and in prod so does the token of client `ledger-ops`.
   type: text/markdown

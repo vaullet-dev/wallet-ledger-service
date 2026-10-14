@@ -1,0 +1,14 @@
+name: prod
+variables:
+  - name: base_url
+    value: http://localhost:18081
+    description: An SSH tunnel to a port-forward on the server (README, Deploying). The ledger has no public route (ADR-008).
+  - name: oauth2_token_url
+    value: https://vaullet.dev/auth/realms/vaullet/protocol/openid-connect/token
+    description: Keycloak realm vaullet, client credentials as client ledger-ops.
+  - secret: true
+    name: oauth2_client_secret
+    description: Client ledger-ops's secret. Bruno keeps it on this machine, never in these files.
+  - name: account_id
+    value: ""
+    description: Set it before a run. Closing is terminal and nothing removes a wallet, so close only an account made for it.

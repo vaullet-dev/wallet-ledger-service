@@ -15,6 +15,25 @@ config:
         password: ""
       bypassProxy: ""
 
+request:
+  auth:
+    type: oauth2
+    flow: client_credentials
+    accessTokenUrl: "{{oauth2_token_url}}"
+    credentials:
+      clientId: ledger-ops
+      clientSecret: "{{oauth2_client_secret}}"
+      placement: body
+    scope: ledger:read ledger:write
+    tokenConfig:
+      id: credentials
+      placement:
+        header: Bearer
+      source: access_token
+    settings:
+      autoFetchToken: true
+      autoRefreshToken: true
+
 docs:
   content: |
     # wallet-ledger-service
@@ -23,12 +42,21 @@ docs:
     balances, freeze and unfreeze one, and close both. The OpenAPI document at `/swagger-ui.html` is the
     reference; this is for calling them.
 
-    ## Environment
+    ## Environments
 
-    **local** only, for now — `./mvnw spring-boot:run`. The `local` profile runs every request as the
-    anonymous principal with `ledger:read` and `ledger:write`, so there is no sign-in and the collection
-    sends no token: its auth is *No Auth*. The ledger is not deployed yet. When it is, the collection
-    gets a `prod` environment that signs in through Keycloak with OAuth2, as auth-service's does.
+    - **local** — `./mvnw spring-boot:run`. The `local` profile runs every request as the anonymous
+      principal with `ledger:read` and `ledger:write`, so there is no sign-in and Bruno sends no token
+      (the empty `oauth2_token_url` is what switches the collection's OAuth2 off).
+    - **prod** — the ledger in the cluster. It has no public route (ADR-008), so forward a local port to
+      its Service first. The Kubernetes API is reachable over SSH only, so the port-forward runs on the
+      server and an SSH tunnel brings it here:
+
+      `ssh -L 18081:localhost:18081 root@<IP> 'kubectl -n wallet-ledger port-forward svc/ledger-service 18081:80'`
+
+      Bruno signs in with OAuth2 client credentials as Keycloak client `ledger-ops`, which holds both
+      scopes. It fetches the token on the first request and a new one when that expires. Set the
+      environment's secret `oauth2_client_secret` to the client's secret first: secret values stay in
+      Bruno on this machine and never reach these files.
 
     ## Flow
 
@@ -39,6 +67,9 @@ docs:
     Closing is terminal: run the folder again against the same `account_id` and *Open REAL wallet*
     answers `409 WALLET_CLOSED`. Set `account_id` in the environment to a fresh UUID first. Any UUID
     will do; the ledger opens the account with its first wallet.
+
+    In prod nothing removes what a run leaves behind, so `account_id` starts empty there: choose the
+    account on purpose, and run the closing requests only against one made for it.
 
     Reservations are not in the collection yet. Until credits land there is no way to put money into an
     account through the API, so a hold could only ever answer `409 INSUFFICIENT_FUNDS`.
