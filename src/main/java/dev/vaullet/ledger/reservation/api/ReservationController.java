@@ -76,6 +76,14 @@ class ReservationController {
             description = "Atomically checks the available balance and reserves against it. "
                     + "Retrying with the same Idempotency-Key returns the original hold.")
     @ApiResponse(responseCode = "201", description = "Hold placed, or the original hold replayed")
+    @ApiResponse(
+            responseCode = "400",
+            description = "VALIDATION_FAILED — a body field missing or out of range, or an Idempotency-Key that "
+                    + "is blank or over 255 characters")
+    @ApiResponse(
+            responseCode = "404",
+            description = "RESOURCE_NOT_FOUND — no such account; opening its first wallet (POST /v1/wallets) "
+                    + "creates it")
     @ApiResponse(responseCode = "409", description = "INSUFFICIENT_FUNDS")
     @ApiResponse(responseCode = "422", description = "HOLD_TTL_TOO_LONG")
     @ApiResponse(responseCode = "503", description = "ACCOUNT_BUSY — lock contention; retry")

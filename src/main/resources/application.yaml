@@ -116,7 +116,7 @@ logging:
 
 # ---------------------------------------------------------------------------
 # Platform library settings (@vaullet-dev/backend-common), bound and validated by
-# ApiProperties, OpenApiProperties and SecurityProperties.
+# ApiProperties, OpenApiProperties, OpenApiOAuth2Properties and SecurityProperties.
 #
 # The prefix is `vaullet` rather than `app` so that a reader can tell at a glance
 # which keys come from the shared library and which are this codebase's own. The
@@ -172,3 +172,10 @@ vaullet:
       Timestamps are RFC 3339 UTC. Errors are RFC 9457 problem+json carrying a stable `code`.
 
       Environment: ${app.environment}
+
+    # Off. With an issuer set, backend-common adds a `keycloak` sign-in to Swagger UI, and on the
+    # ledger it cannot work: there is no public route, only the tunnel (README, "Calling it"), and
+    # gitops' `swagger-ui` client allows auth's redirect URI alone and has no ledger:* scope. The
+    # way in is `bearer-jwt`, with a token from `ledger-ops`.
+    oauth2:
+      enabled: false
