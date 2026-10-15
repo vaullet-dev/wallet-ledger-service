@@ -23,7 +23,7 @@ deliberately differs from the platform default.
 ./mvnw verify              # adds 69 integration tests on real PostgreSQL     (~25s)
 ```
 
-> `dev.vaullet:common-*` 1.0.0 resolves from GitHub Packages, which requires authentication even for
+> `dev.vaullet:common-*` 1.1.1 resolves from GitHub Packages, which requires authentication even for
 > a public artifact: a `github` server in `~/.m2/settings.xml` with a `read:packages` token, as for
 > wallet-auth-service.
 
@@ -502,6 +502,9 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:18081/v1/wallets?accoun
 `/actuator/info` and `/actuator/health` need no token, so `curl localhost:18081/actuator/info` says
 which build is running. The collection's `prod` environment does the same as the commands above; see
 [Calling it by hand](#calling-it-by-hand).
+
+Swagger UI is <http://localhost:18081/swagger-ui.html> through the same tunnel; *Authorize* with
+`bearer-jwt` and `$TOKEN`, since the Keycloak sign-in cannot work here (`application.yaml` says why).
 
 **What has to exist first**, all of it gitops' (#29): the Argo Application (namespace
 `wallet-ledger`, this repository, `master`, path `.`); `ledger_migrator`, a member of `vaullet`, and

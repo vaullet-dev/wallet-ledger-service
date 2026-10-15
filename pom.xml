@@ -66,8 +66,13 @@
       able to rebuild the exact bytes it deployed, and a snapshot coordinate cannot promise that.
       Bumping it is a deliberate `deps:` commit, which is a PATCH — the library moving is not,
       by itself, a change to this service's own API.
+
+      1.1.1 at least (#14). Before 1.1.0 the OpenAPI document named the bodies' fields in
+      camelCase, while this service reads and writes only snake_case, so a request built from it —
+      Swagger UI's "Try it out" included — had every multi-word field ignored. 1.1.1 is the first
+      whose schemas are also right in the OpenAPI 3.1 document springdoc writes.
     -->
-    <common.version>1.0.0</common.version>
+    <common.version>1.1.1</common.version>
     <springdoc.version>3.1.0</springdoc.version>
     <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
   </properties>
