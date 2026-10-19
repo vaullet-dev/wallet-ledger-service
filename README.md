@@ -122,6 +122,9 @@ Everything else is as ADR-004 has it: buckets per grant, allocation by spend pri
 across buckets. What a wallet adds is whether its buckets may be spent from at all. More types are
 expected, and each one is a migration (the `wallets.wallet_type` CHECK) plus a line in `WalletType`.
 
+Every table as V1–V3 leave it — columns, keys, `CHECK`s, indexes, rules and grants — is in
+[`docs/schema/`](docs/schema/), generated from a migrated database.
+
 Opening a wallet opens the account in the ledger too, if it is the account's first: `account_balances`
 gets its row, and a `REAL` wallet gets its `CASH` bucket at once. A `BONUS` wallet starts with no
 buckets; grants add them.

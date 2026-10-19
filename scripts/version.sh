@@ -46,15 +46,21 @@
 # is exactly what a branch build is: after the last release, ahead of the next one.
 # Using the last released version instead would produce `0.1.0-holds-7`, which sorts
 # BEFORE the 0.1.0 it was branched from — a build that claims to be older than its own
-# parent. To change that anyway, drop the `min_bump patch` call in cmd_version.
+# parent. To change that anyway, drop the patch floor in cmd_prerelease.
 #
 # A branch with only chore/docs commits still needs a number, so it is floored at a
 # patch bump; a release with only chore/docs commits is correctly no release at all.
+#
+# So a push to main/master with nothing releasable since the last tag is no release, and
+# `version` refuses to name one. CI still builds and tests that commit, and Maven still
+# needs a number for it: `prerelease` gives it the branch form, `0.2.2-master-58`, which
+# sorts after the last release and can never be mistaken for one.
 #
 # ---------------------------------------------------------------------------
 # Usage
 #
 #   scripts/version.sh              the version this build should carry
+#   scripts/version.sh prerelease   the branch form, X.Y.Z-<branch>-<n>, on main/master too
 #   scripts/version.sh bump         major | minor | patch | none
 #   scripts/version.sh tag          the git tag for a release build (vX.Y.Z)
 #   scripts/version.sh lint [range] fail on a commit that does not follow the convention
@@ -203,19 +209,34 @@ is_release_branch() {
 # --- commands ---------------------------------------------------------------
 
 cmd_version() {
-  local bump; bump="$(detect_bump)"
   if is_release_branch; then
+    local bump; bump="$(detect_bump)"
     if [ "$bump" = "none" ]; then
       local since; since="$(last_tag)"; [ -n "$since" ] || since="the start of history"
       die "Nothing to release: no breaking/feature/patch commit since $since."
     fi
     next_version "$bump"
   else
-    # Floor at patch: a branch of nothing but docs commits still needs a number, and it
-    # must sort after the release it left.
-    [ "$bump" != "none" ] && : || bump="patch"
-    printf '%s-%s-%s' "$(next_version "$bump")" "$(branch_slug)" "$(build_number)"
+    cmd_prerelease
   fi
+}
+
+cmd_tag() {
+  is_release_branch || die "tag is only meaningful on a release branch"
+  # Assigned first, so that when `version` refuses (nothing to release), this fails too.
+  # Inside printf's arguments the failure went unseen, and the tag came out as a bare "v".
+  local version; version="$(cmd_version)"
+  printf '%s%s' "$TAG_PREFIX" "$version"
+}
+
+# The branch form, on any branch. Every branch build carries it, and so does a build of
+# main/master with nothing to release: see "What comes out".
+cmd_prerelease() {
+  local bump; bump="$(detect_bump)"
+  # Floor at patch: a branch of nothing but docs commits still needs a number, and it
+  # must sort after the release it left.
+  [ "$bump" != "none" ] && : || bump="patch"
+  printf '%s-%s-%s' "$(next_version "$bump")" "$(branch_slug)" "$(build_number)"
 }
 
 # The regex that decides whether a subject is readable at all. `cmd_lint` applies it to a
@@ -281,6 +302,7 @@ cmd_explain() {
   printf 'level         %s\n' "$bump"
   if is_release_branch && [ "$bump" = "none" ]; then
     printf 'version       -  nothing releasable\n'
+    printf 'build         %s\n' "$(cmd_prerelease)"
   else
     printf 'version       %s\n' "$(cmd_version)"
   fi
@@ -288,10 +310,11 @@ cmd_explain() {
 
 case "${1:-version}" in
   version) cmd_version ;;
+  prerelease) cmd_prerelease ;;
   bump)    detect_bump ;;
-  tag)     is_release_branch || die "tag is only meaningful on a release branch"; printf '%s%s' "$TAG_PREFIX" "$(cmd_version)" ;;
+  tag)     cmd_tag ;;
   lint)    shift; cmd_lint "${1:-}" ;;
   lint-subject) shift; cmd_lint_subject "${1:-}" ;;
   explain) cmd_explain ;;
-  *)       die "usage: $0 [version|bump|tag|lint [range]|explain]" ;;
+  *)       die "usage: $0 [version|prerelease|bump|tag|lint [range]|explain]" ;;
 esac
