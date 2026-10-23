@@ -91,10 +91,19 @@ jobs:
       # A pull request builds as the pre-release it would become — 0.2.0-holds-7, not a
       # placeholder — so the version machinery is exercised by every run rather than only by
       # the release that depends on it.
+      #
+      # A push to master with nothing releasable since the last tag (a deploy bump, a docs
+      # change) is no release: the release job ships nothing, and version.sh refuses to name
+      # one. The commit is still built and tested, as the pre-release a branch would be.
       - name: Work out this build's version
         id: version
         run: |
-          VERSION="$(scripts/version.sh)"
+          BUMP="$(scripts/version.sh bump)"
+          if [ "$BUMP" = "none" ]; then
+            VERSION="$(scripts/version.sh prerelease)"
+          else
+            VERSION="$(scripts/version.sh)"
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           scripts/version.sh explain | tee -a "$GITHUB_STEP_SUMMARY"
         env:
