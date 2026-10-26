@@ -69,6 +69,7 @@ class WalletControllerTest {
 
     private static final String READ = "SCOPE_ledger:read";
     private static final String WRITE = "SCOPE_ledger:write";
+    private static final String RESERVE = "SCOPE_ledger:reserve";
 
     private static final String OPEN_REAL = """
             {"account_id":"11111111-1111-1111-1111-111111111111","type":"REAL"}""";
@@ -116,6 +117,28 @@ class WalletControllerTest {
                 .hasStatus(403);
 
         // The important half: authorisation ran before the service did.
+        verifyNoInteractions(wallets);
+    }
+
+    @Test
+    @DisplayName("ledger:reserve, the holds' scope, opens, freezes and closes nothing — architecture G6")
+    void theHoldScopeChangesNoWallet() {
+        // The token wallet-transaction-service gets to hold its debits: it must not manage wallets.
+        assertThat(mvc.post()
+                        .uri("/v1/wallets")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(OPEN_REAL)
+                        .with(jwt().authorities(() -> RESERVE)))
+                .hasStatus(403);
+        assertThat(mvc.patch()
+                        .uri("/v1/wallets/{id}", WALLET_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(FREEZE)
+                        .with(jwt().authorities(() -> RESERVE)))
+                .hasStatus(403);
+        assertThat(mvc.delete().uri("/v1/wallets/{id}", WALLET_ID).with(jwt().authorities(() -> RESERVE)))
+                .hasStatus(403);
+
         verifyNoInteractions(wallets);
     }
 

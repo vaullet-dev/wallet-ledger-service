@@ -158,7 +158,7 @@ vaullet:
     # these are handed to the anonymous principal, so a developer exercises the real
     # authorisation rules rather than a build with authorisation compiled out.
     local:
-      anonymous-authorities: SCOPE_ledger:read,SCOPE_ledger:write,ROLE_OPERATOR
+      anonymous-authorities: SCOPE_ledger:read,SCOPE_ledger:write,SCOPE_ledger:reserve,ROLE_OPERATOR
 
   openapi:
     title: Vaullet Ledger API

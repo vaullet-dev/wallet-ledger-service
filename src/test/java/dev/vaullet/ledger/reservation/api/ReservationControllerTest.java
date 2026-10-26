@@ -61,6 +61,7 @@ class ReservationControllerTest {
 
     private static final String READ = "SCOPE_ledger:read";
     private static final String WRITE = "SCOPE_ledger:write";
+    private static final String RESERVE = "SCOPE_ledger:reserve";
 
     private static final String BODY = """
             {"account_id":"11111111-1111-1111-1111-111111111111","amount":"60.00"}""";
@@ -82,8 +83,8 @@ class ReservationControllerTest {
     }
 
     @Test
-    @DisplayName("a valid token without the write scope cannot place a hold")
-    void requiresTheWriteScope() {
+    @DisplayName("a valid token without ledger:reserve cannot place a hold")
+    void requiresTheReserveScope() {
         assertThat(mvc.post()
                         .uri("/v1/reservations")
                         .header("Idempotency-Key", "key-1")
@@ -97,6 +98,29 @@ class ReservationControllerTest {
     }
 
     @Test
+    @DisplayName("ledger:write, the wallets' scope, neither places nor releases a hold — architecture G6")
+    void theWalletScopeHoldsNothing() {
+        // The token wallet-auth-service's outbox relay gets to open wallets: it must not move money.
+        assertThat(mvc.post()
+                        .uri("/v1/reservations")
+                        .header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY)
+                        .with(jwt().authorities(() -> WRITE)))
+                .hasStatus(403)
+                .bodyJson()
+                .extractingPath("$.code")
+                .isEqualTo("ACCESS_DENIED");
+        assertThat(mvc.delete()
+                        .uri("/v1/reservations/{id}", RESERVATION_ID)
+                        .with(jwt().authorities(() -> WRITE)))
+                .hasStatus(403);
+
+        verify(ledger, never()).reserve(any(), any(), any(), any());
+        verify(ledger, never()).release(any());
+    }
+
+    @Test
     @DisplayName("returns 201 with a Location header pointing at the new hold")
     void placesAHold() {
         when(ledger.reserve(eq(ACCOUNT_ID), eq(new BigDecimal("60.00")), eq("key-1"), eq(null)))
@@ -107,7 +131,7 @@ class ReservationControllerTest {
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(201)
                 .headers()
                 .hasHeaderSatisfying("Location", values -> assertThat(values.getFirst())
@@ -124,7 +148,7 @@ class ReservationControllerTest {
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(201);
 
         // A JSON number here would be a rounding defect waiting for a client with binary floats.
@@ -143,7 +167,7 @@ class ReservationControllerTest {
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(201);
 
         // Defaulting here as well as in the service would put one policy in two places.
@@ -163,7 +187,7 @@ class ReservationControllerTest {
                                 """
                                 {"account_id":"11111111-1111-1111-1111-111111111111",\
                                 "amount":"20.00","expires_in_seconds":259200}""")
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(201);
 
         verify(ledger).reserve(ACCOUNT_ID, new BigDecimal("20.00"), "wager", Duration.ofDays(3));
@@ -183,7 +207,7 @@ class ReservationControllerTest {
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(503);
 
         result.headers().hasHeaderSatisfying("Retry-After", values -> assertThat(values.getFirst())
@@ -198,7 +222,7 @@ class ReservationControllerTest {
                         .uri("/v1/reservations")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(400);
 
         verify(ledger, never()).reserve(any(), any(), any(), any());
@@ -213,7 +237,7 @@ class ReservationControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"account_id":"11111111-1111-1111-1111-111111111111","amount":"0"}""")
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(400);
 
         result.bodyJson().extractingPath("$.errors[*].field").asArray().contains("amount");
@@ -231,7 +255,7 @@ class ReservationControllerTest {
                         .header("Idempotency-Key", "key-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(409)
                 .hasContentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON);
 
@@ -254,7 +278,7 @@ class ReservationControllerTest {
                                 """
                                 {"account_id":"11111111-1111-1111-1111-111111111111",\
                                 "amount":"1.00","expires_in_seconds":34560000}""")
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(422);
 
         result.bodyJson().extractingPath("$.code").isEqualTo("HOLD_TTL_TOO_LONG");
@@ -265,7 +289,7 @@ class ReservationControllerTest {
     void releasesAHold() {
         assertThat(mvc.delete()
                         .uri("/v1/reservations/{id}", RESERVATION_ID)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(204);
 
         verify(ledger).release(RESERVATION_ID);

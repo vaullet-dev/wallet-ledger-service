@@ -178,8 +178,8 @@ folder.
 
 | Environment | Base URL | Sign-in |
 | --- | --- | --- |
-| `local` | `http://localhost:8080` | None. The `local` profile runs every request as the anonymous principal with `ledger:read` and `ledger:write`, and the environment's empty `oauth2_token_url` keeps Bruno from asking for a token. |
-| `prod` | `http://localhost:18081`, a port-forward to the cluster | OAuth2 client credentials as Keycloak client `ledger-ops`, which holds both scopes. Set the environment's secret `oauth2_client_secret` first: Bruno keeps secret values on the machine and out of the files. See [Deploying](#deploying). |
+| `local` | `http://localhost:8080` | None. The `local` profile runs every request as the anonymous principal with `ledger:read`, `ledger:write` and `ledger:reserve`, and the environment's empty `oauth2_token_url` keeps Bruno from asking for a token. |
+| `prod` | `http://localhost:18081`, a port-forward to the cluster | OAuth2 client credentials as Keycloak client `ledger-ops`, which holds all three scopes. Set the environment's secret `oauth2_client_secret` first: Bruno keeps secret values on the machine and out of the files. See [Deploying](#deploying). |
 
 OAuth2 is set once, on the collection, and sends the client credentials in the form body rather than
 a Basic header: Bruno does not form-encode a Basic header's id and secret first, Keycloak decodes them
@@ -486,10 +486,10 @@ of an image identical to the one it points at. 0.2.0 is the floor: older images 
 `migrate` profile nor V3.
 
 **Calling it.** From inside the cluster, through a port-forward, with a token from Keycloak's client
-`ledger-ops`: client credentials only, holding `ledger:read` and `ledger:write`. The Kubernetes API is
-reachable over SSH only (gitops README, "Reaching things"), so the port-forward runs on the server and
-an SSH tunnel brings it here. 18081 rather than 8080, so a local `spring-boot:run` and the tunnel can
-be up at the same time.
+`ledger-ops`: client credentials only, holding `ledger:read`, `ledger:write` and `ledger:reserve`. The
+Kubernetes API is reachable over SSH only (gitops README, "Reaching things"), so the port-forward runs
+on the server and an SSH tunnel brings it here. 18081 rather than 8080, so a local `spring-boot:run`
+and the tunnel can be up at the same time.
 
 ```
 ssh -L 18081:localhost:18081 root@<IP> \
@@ -498,7 +498,7 @@ ssh -L 18081:localhost:18081 root@<IP> \
 TOKEN=$(curl -s https://vaullet.dev/auth/realms/vaullet/protocol/openid-connect/token \
           -d grant_type=client_credentials -d client_id=ledger-ops \
           --data-urlencode client_secret="$LEDGER_OPS_SECRET" \
-          --data-urlencode 'scope=ledger:read ledger:write' | jq -r .access_token)
+          --data-urlencode 'scope=ledger:read ledger:write ledger:reserve' | jq -r .access_token)
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:18081/v1/wallets?account_id=…"
 ```
 
@@ -509,13 +509,13 @@ which build is running. The collection's `prod` environment does the same as the
 Swagger UI is <http://localhost:18081/swagger-ui.html> through the same tunnel; *Authorize* with
 `bearer-jwt` and `$TOKEN`, since the Keycloak sign-in cannot work here (`application.yaml` says why).
 
-**What has to exist first**, all of it gitops' (#29): the Argo Application (namespace
-`wallet-ledger`, this repository, `master`, path `.`); `ledger_migrator`, a member of `vaullet`, and
-`ledger_app` as managed roles of the `money` cluster, with their passwords read into `postgres` from
-the same OpenBao paths this repository reads; `03-openbao.sh onboard wallet-ledger` and the
-ClusterSecretStore `openbao-wallet-ledger`; Keycloak's `ledger:read` and `ledger:write` client scopes
-and the client `ledger-ops`. The two passwords and the client's secret are put into OpenBao once,
-with values you generate:
+**What has to exist first**, all of it gitops' (#29): the Argo Application (namespace `wallet-ledger`,
+this repository, `master`, path `.`); `ledger_migrator`, a member of `vaullet`, and `ledger_app` as
+managed roles of the `money` cluster, with their passwords read into `postgres` from the same OpenBao
+paths this repository reads; `03-openbao.sh onboard wallet-ledger` and the ClusterSecretStore
+`openbao-wallet-ledger`; Keycloak's `ledger:read`, `ledger:write` and `ledger:reserve` client scopes
+(the last since gitops#38) and the client `ledger-ops`. The two passwords and the client's secret are
+put into OpenBao once, with values you generate:
 
 ```
 bao kv put kv/wallet-ledger/db-migrator     password="$(openssl rand -base64 24)"
@@ -532,10 +532,11 @@ platform. What this service contributes is the scopes.
 
 - **Deny by default** — the chain ends in `anyRequest().authenticated()`.
 - **Stateless JWT resource server.** No sessions; CSRF disabled *because* there is no session to ride.
-- Scopes: `ledger:read` for every read — balances, reservations, wallets — and `ledger:write` for
-  every change: placing or releasing a hold, opening, freezing, unfreezing or closing a wallet.
-  Method security is on in every profile, including `local`, so a developer exercises the real
-  authorisation rules with a principal that satisfies them.
+- Scopes: `ledger:read` for every read — balances, reservations, wallets; `ledger:reserve` for
+  placing and releasing a hold, ADR-008's scope for the money path; and `ledger:write` for the
+  wallets: opening, freezing, unfreezing and closing one. Method security is on in every profile,
+  including `local`, so a developer exercises the real authorisation rules with a principal that
+  satisfies them.
 - **Actuator beyond health/info requires `ROLE_OPERATOR`.**
 
 **One behaviour changed in the move, and it was a bug.** This service's own copy of the authority
@@ -549,9 +550,13 @@ by copy-paste.
 > Note also that Spring Security 7 adds a `FACTOR_BEARER` authority of its own to every bearer-token
 > principal. It shows up in an exact-match authority assertion.
 
-Two scope names remain unreconciled: ADR-008 grants Transaction Service `ledger:reserve` on the money
-path, while this service checks `ledger:write`. That is an ADR-008-versus-code question, not a
-consequence of the extraction, and it is not resolved here.
+**Holds and wallets have separate scopes** since #23 (architecture's G6). Before it, `ledger:write`
+allowed both, so wallet-auth-service's outbox relay, which holds it to open wallets, could also have
+placed and released holds, and wallet-transaction-service, which only places holds, needed a token
+that could freeze and close wallets. Now holding money needs `ledger:reserve`, the scope ADR-008
+already named for the money path, and changing a wallet needs `ledger:write`. Each service's client
+is offered only its own, wallet-transaction-service's once gitops#39 takes `ledger:write` off it, and
+`ledger-ops`, staff calling by hand, holds both.
 
 ---
 
@@ -583,12 +588,11 @@ does not yet implement, the fourth is cleanup, and the last two are where the wa
    throws only `ApplicationException`s (`ResourceNotFoundException`, `WalletClosedException`,
    `WalletNotEmptyException`) and needed nothing from the bridge; its `@PreAuthorize` rules sit on
    `WalletController` only to keep one convention until all of them move.
-5. **Who may freeze or close a wallet, and the scopes in Keycloak.** The wallet endpoints are checked
-   by scope only, like the rest of the ledger, so any caller holding `ledger:write` can freeze or
-   close a wallet as well as place a hold. Which staff roles may freeze or close one is not decided.
-   The `ledger:*` scopes reach the realm with the deployment (gitops#29), and for now only one client
-   holds them, `ledger-ops`, for calls by hand (see [Deploying](#deploying)). Reconciling ADR-008's
-   `ledger:reserve` for the money path (see [Security](#security)) would also separate the two.
+5. **Who may freeze or close a wallet.** The wallet endpoints are checked by scope only, like the
+   rest of the ledger, so any caller holding `ledger:write` can freeze or close any wallet: staff as
+   `ledger-ops`, and wallet-auth-service's outbox relay, which only ever opens them. Which staff roles
+   may freeze or close one is not decided. Holds are no longer part of it: they need `ledger:reserve`
+   (see [Security](#security)).
 6. **Nothing opens a wallet on its own.** ADR-014 §7 has the ledger consume
    `identity.account-created.v1` and create the account's row and `CASH` bucket. With wallets, that
    consumer would open the account's `REAL` and `BONUS` wallets, which today are two

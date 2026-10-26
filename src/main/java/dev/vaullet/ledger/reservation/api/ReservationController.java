@@ -53,6 +53,13 @@ import org.springframework.web.util.UriComponentsBuilder;
  *       placed a second hold would silently overstate what an account owes.
  * </ul>
  *
+ * <p>Placing and releasing a hold need {@code ledger:reserve}, the scope ADR-008 gives the money path,
+ * and reading one needs {@code ledger:read}. Not {@code ledger:write}, which is the wallets' scope:
+ * wallet-auth-service's outbox relay holds it to open them, and a token that opens wallets should not
+ * be able to hold money, nor a token that holds money open, freeze or close wallets (architecture's
+ * G6, #23). wallet-transaction-service's client gets {@code ledger:reserve} alone; only
+ * {@code ledger-ops}, staff calling by hand, holds both.
+ *
  * <p>The {@code @PreAuthorize} rules sit on these methods rather than on {@code LedgerService},
  * which is where the template puts them and where they ultimately belong — see the handover note in
  * {@link LedgerErrorBridge}.
@@ -70,7 +77,7 @@ class ReservationController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('SCOPE_ledger:write')")
+    @PreAuthorize("hasAuthority('SCOPE_ledger:reserve')")
     @Operation(
             summary = "Place a hold",
             description = "Atomically checks the available balance and reserves against it. "
@@ -128,7 +135,7 @@ class ReservationController {
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @PreAuthorize("hasAuthority('SCOPE_ledger:write')")
+    @PreAuthorize("hasAuthority('SCOPE_ledger:reserve')")
     @Operation(
             summary = "Release a hold",
             description = "Returns the funds to the available balance. Writes no journal entry — money "

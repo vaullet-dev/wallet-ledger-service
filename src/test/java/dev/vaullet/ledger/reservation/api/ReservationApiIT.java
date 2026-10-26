@@ -31,7 +31,7 @@ import org.springframework.test.web.servlet.assertj.MvcTestResultAssert;
 class ReservationApiIT {
 
     private static final String READ = "SCOPE_ledger:read";
-    private static final String WRITE = "SCOPE_ledger:write";
+    private static final String RESERVE = "SCOPE_ledger:reserve";
 
     @Autowired
     private MockMvcTester mvc;
@@ -99,7 +99,7 @@ class ReservationApiIT {
 
         assertThat(mvc.delete()
                         .uri("/v1/reservations/{id}", reservationId)
-                        .with(jwt().authorities(() -> WRITE)))
+                        .with(jwt().authorities(() -> RESERVE)))
                 .hasStatus(204);
 
         assertThat(mvc.get()
@@ -165,7 +165,7 @@ class ReservationApiIT {
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body(amount))
-                .with(jwt().authorities(() -> WRITE))
+                .with(jwt().authorities(() -> RESERVE))
                 .exchange();
     }
 

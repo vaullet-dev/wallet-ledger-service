@@ -476,7 +476,7 @@ class WalletServiceIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"account_id":"%s","amount":"10.00"}""".formatted(account))
-                        .with(jwt().authorities(() -> "SCOPE_ledger:write")))
+                        .with(jwt().authorities(() -> "SCOPE_ledger:reserve")))
                 .hasStatus(409)
                 .bodyJson()
                 .extractingPath("$.code")
